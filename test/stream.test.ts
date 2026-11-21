@@ -427,7 +427,60 @@ describe("Cascade stream", () => {
 		const fetch: typeof globalThis.fetch = async () => new Response("<html>secret</html>", { status: 403 });
 		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch }).result();
 		expect(result.errorMessage).toBe("Devin auth error 403");
-		expect(() => streamDevin(model, context)).toThrow("API key missing");
+		const missing = await streamDevin(model, context).result();
+		expect(missing.stopReason).toBe("error");
+		expect(missing.errorMessage).toContain("API key missing");
+	});
+
+	it("drops null header overrides and replaces defaults case-insensitively", async () => {
+		const base = transport([frame({ deltaText: "ok" })]);
+		let chatHeaders: Headers | undefined;
+		const fetch: typeof globalThis.fetch = async (url, init) => {
+			if (String(url).endsWith("/GetChatMessage")) chatHeaders = new Headers(init?.headers);
+			return base(url, init);
+		};
+		const result = await streamDevin(model, context, {
+			apiKey: "a.b.c",
+			fetch,
+			headers: { "User-Agent": "custom", "connect-accept-encoding": null, "x-extra": "1" },
+		}).result();
+		expect(result.stopReason).toBe("stop");
+		expect(chatHeaders?.get("user-agent")).toBe("custom");
+		expect(chatHeaders?.has("connect-accept-encoding")).toBe(false);
+		expect(chatHeaders?.get("x-extra")).toBe("1");
+	});
+
+	it("rejects a non-HTTPS custom API server before sending credentials there", async () => {
+		const calls: string[] = [];
+		const fetch: typeof globalThis.fetch = async (url) => {
+			calls.push(String(url));
+			return new Response(
+				toBinary(
+					GetUserJwtResponseSchema,
+					create(GetUserJwtResponseSchema, { userJwt: "user-jwt", customApiServerUrl: "http://plain.invalid" }),
+				),
+			);
+		};
+		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch }).result();
+		expect(result.errorMessage).toContain("non-HTTPS");
+		expect(calls).toHaveLength(1);
+	});
+
+	it("fails a stalled response body after timeoutMs without data", async () => {
+		const stalled: typeof globalThis.fetch = async (url, init) => {
+			if (String(url).endsWith("/GetUserJwt")) return transport([])(url, init);
+			return new Response(new ReadableStream({ start() {} }));
+		};
+		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch: stalled, timeoutMs: 20 }).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("timed out after 20 ms");
+	});
+
+	it("caps the inflated size of compressed frames", async () => {
+		const bomb = frameConnectMessage(gzipSync(Buffer.alloc(17 * 1024 * 1024)), 1);
+		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch: transport([bomb]) }).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("larger than 16777216 bytes");
 	});
 
 	it("routes undefined reasoning to Off instead of the account thinking default", async () => {

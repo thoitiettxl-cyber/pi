@@ -9,6 +9,8 @@
 import { gunzipSync } from "node:zlib";
 import { fromBinary, type MessageCodec, type ProtoMessage } from "./protobuf.ts";
 
+const MAX_UNARY_INFLATED_BYTES = 16 * 1024 * 1024;
+
 /**
  * Decode a unary Devin Connect response. Edges variously return bare protobuf
  * or a gzipped protobuf body; Node's `fetch` normally decompresses first, so the
@@ -23,7 +25,7 @@ export function decodeDevinUnaryMessage<TMessage extends ProtoMessage>(
 		return fromBinary(schema, payload);
 	} catch {
 		try {
-			return fromBinary(schema, gunzipSync(payload));
+			return fromBinary(schema, gunzipSync(payload, { maxOutputLength: MAX_UNARY_INFLATED_BYTES }));
 		} catch {
 			return null;
 		}

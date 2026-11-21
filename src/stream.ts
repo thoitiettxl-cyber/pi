@@ -14,6 +14,7 @@ import {
 	type Message,
 	parseStreamingJson,
 	parseToolCallArguments,
+	type ProviderHeaders,
 	type SimpleStreamOptions,
 	type StreamOptions,
 	type TextContent,
@@ -96,12 +97,13 @@ const DEVIN_TOOL_CALL_ID_MAX_LENGTH = 40;
 /**
  * Hard upper bound on a single Connect frame payload. The 4-byte length prefix
  * is otherwise attacker-controlled (up to `2**32 - 1`), so a malicious or buggy
- * peer could force {@link streamDevin}'s reader to buffer gigabytes before the
- * idle-timeout wrapper aborts. Well above any legitimate Cascade response but
- * tight enough that a corrupt length prefix
- * fails fast instead of consuming memory.
+ * peer could force {@link streamDevin}'s reader to buffer gigabytes. Also caps
+ * the inflated size of compressed frames and trailers. Well above any
+ * legitimate Cascade response but tight enough that a corrupt length prefix or
+ * a gzip bomb fails fast instead of consuming memory.
  */
 const MAX_CONNECT_FRAME_PAYLOAD = 16 * 1024 * 1024;
+const GUNZIP_LIMIT = { maxOutputLength: MAX_CONNECT_FRAME_PAYLOAD };
 /**
  * Recovery heuristic for opaque Devin `invalid_argument` trailers. This is not
  * asserted to be the backend's hard limit: small requests can hit the same
@@ -161,7 +163,6 @@ export const streamDevin = (
 	transcript: TranscriptContext,
 	options?: DevinOptions,
 ): AssistantMessageEventStream => {
-	if (!options?.apiKey) throw new Error("Devin API key missing. Run /login or set DEVIN_API_KEY.");
 	const stream = createAssistantMessageEventStream();
 	const context = collapseSystemMessages(transcript);
 
@@ -231,11 +232,28 @@ export const streamDevin = (
 			});
 		};
 
+		const requestController = new AbortController();
+		const signal = options?.signal
+			? AbortSignal.any([options.signal, requestController.signal])
+			: requestController.signal;
+		let idleTimer: ReturnType<typeof setTimeout> | undefined;
+		const armIdleTimer = () => {
+			const timeoutMs = options?.timeoutMs;
+			if (!timeoutMs || timeoutMs <= 0) return;
+			clearTimeout(idleTimer);
+			idleTimer = setTimeout(
+				() => requestController.abort(new Error(`Devin request timed out after ${timeoutMs} ms without data`)),
+				timeoutMs,
+			);
+		};
+
 		try {
-			options?.signal?.throwIfAborted();
+			if (!options?.apiKey) throw new Error("Devin API key missing. Run /login or set DEVIN_API_KEY.");
+			signal.throwIfAborted();
+			armIdleTimer();
 			const fetchImpl = options?.fetch ?? fetch;
 			const baseUrl = (model.baseUrl || DEVIN_API_URL).replace(/\/+$/, "");
-			const auth = await fetchDevinAuthMetadata(options?.apiKey, baseUrl, fetchImpl, options?.signal);
+			const auth = await fetchDevinAuthMetadata(options.apiKey, baseUrl, fetchImpl, signal);
 			const chatBaseUrl = auth.baseUrl ?? baseUrl;
 			const turn: DevinTurn = {
 				apiKey: options?.apiKey,
@@ -259,7 +277,7 @@ export const streamDevin = (
 			// assignment JWT on the chat request that shares the cascade id.
 			let assignment: ModelAssignment | undefined;
 			if (model.devin?.modelRouter) {
-				assignment = await assignDevinModel(model, turn, chatBaseUrl, fetchImpl, options?.signal);
+				assignment = await assignDevinModel(model, turn, chatBaseUrl, fetchImpl, signal);
 				output.responseModel = assignment.modelUid;
 			}
 			let request = buildDevinChatRequest(model, context, options, turn, assignment);
@@ -275,17 +293,19 @@ export const streamDevin = (
 
 			const response = await fetchImpl(chatBaseUrl + CHAT_MESSAGE_PATH, {
 				method: "POST",
-				headers: {
-					"content-type": "application/connect+proto",
-					"connect-protocol-version": "1",
-					...(compress ? { "connect-content-encoding": "gzip" } : {}),
-					"accept-encoding": "identity",
-					"user-agent": "connect-go/1.18.1 (go1.26.3)",
-					"connect-accept-encoding": "gzip",
-					...options?.headers,
-				},
+				headers: mergeHeaders(
+					{
+						"content-type": "application/connect+proto",
+						"connect-protocol-version": "1",
+						...(compress ? { "connect-content-encoding": "gzip" } : {}),
+						"accept-encoding": "identity",
+						"user-agent": "connect-go/1.18.1 (go1.26.3)",
+						"connect-accept-encoding": "gzip",
+					},
+					options?.headers,
+				),
 				body: new Uint8Array(frame),
-				signal: options?.signal,
+				signal,
 			});
 
 			await options?.onResponse?.({ status: response.status, headers: Object.fromEntries(response.headers) }, model);
@@ -308,7 +328,7 @@ export const streamDevin = (
 			const abortReader = () => {
 				void reader.cancel().catch(() => {});
 			};
-			options?.signal?.addEventListener("abort", abortReader, { once: true });
+			signal.addEventListener("abort", abortReader, { once: true });
 			const frameDecoder = new ConnectFrameDecoder({
 				limit: {
 					maxPayloadBytes: MAX_CONNECT_FRAME_PAYLOAD,
@@ -323,15 +343,16 @@ export const streamDevin = (
 			let sawEndStream = false;
 			try {
 				for (;;) {
-					options?.signal?.throwIfAborted();
+					signal.throwIfAborted();
 					const { done, value } = await reader.read();
-					options?.signal?.throwIfAborted();
+					signal.throwIfAborted();
+					armIdleTimer();
 
 					for (const { flags: flag, payload } of frameDecoder.decode(value)) {
 						if (sawEndStream) throw new Error("Unexpected Connect frame after end-stream");
 						if (flag & CONNECT_END_STREAM_FLAG) {
 							sawEndStream = true;
-							const trailerBytes = flag & CONNECT_COMPRESSED_FLAG ? gunzipSync(payload) : payload;
+							const trailerBytes = flag & CONNECT_COMPRESSED_FLAG ? gunzipSync(payload, GUNZIP_LIMIT) : payload;
 							const trailerError = readConnectTrailerError(trailerBytes.toString("utf8").trim());
 							if (trailerError) {
 								// #4218: these rejections carry no HTTP error body, so the raw
@@ -371,7 +392,7 @@ export const streamDevin = (
 							continue;
 						}
 
-						const raw = flag & CONNECT_COMPRESSED_FLAG ? gunzipSync(payload) : payload;
+						const raw = flag & CONNECT_COMPRESSED_FLAG ? gunzipSync(payload, GUNZIP_LIMIT) : payload;
 						const msg = fromBinary(GetChatMessageResponseSchema, raw);
 						await options?.onProviderStreamEvent?.(msg, model);
 						if (msg.messageId && !output.responseId) output.responseId = msg.messageId;
@@ -496,7 +517,7 @@ export const streamDevin = (
 				frameDecoder.finish();
 				if (!sawEndStream) throw new Error("Missing Connect end-stream trailer");
 			} finally {
-				options?.signal?.removeEventListener("abort", abortReader);
+				signal.removeEventListener("abort", abortReader);
 				await reader.cancel().catch(() => {});
 				reader.releaseLock();
 			}
@@ -535,6 +556,8 @@ export const streamDevin = (
 			output.durationMs = performance.now() - startTime;
 			stream.push({ type: "error", reason, error: output });
 			stream.end();
+		} finally {
+			clearTimeout(idleTimer);
 		}
 	})();
 	return stream;
@@ -574,7 +597,28 @@ async function fetchDevinAuthMetadata(
 		});
 	}
 	const customBaseUrl = decoded.customApiServerUrl.trim();
-	return { userJwt: decoded.userJwt, ...(customBaseUrl ? { baseUrl: customBaseUrl.replace(/\/+$/, "") } : undefined) };
+	if (!customBaseUrl) return { userJwt: decoded.userJwt };
+	// The custom server receives the API key and user JWT, so never accept a plaintext or malformed URL.
+	let parsed: URL;
+	try {
+		parsed = new URL(customBaseUrl);
+	} catch {
+		throw new DevinResponseError("Devin auth error: GetUserJwt returned an invalid API server URL");
+	}
+	if (parsed.protocol !== "https:") {
+		throw new DevinResponseError("Devin auth error: GetUserJwt returned a non-HTTPS API server URL");
+	}
+	return { userJwt: decoded.userJwt, baseUrl: customBaseUrl.replace(/\/+$/, "") };
+}
+
+/** Merge request headers case-insensitively; a `null` override removes the header. */
+function mergeHeaders(base: Record<string, string>, overrides: ProviderHeaders | undefined): Record<string, string> {
+	const merged = new Map<string, [string, string]>();
+	for (const [name, value] of [...Object.entries(base), ...Object.entries(overrides ?? {})]) {
+		merged.delete(name.toLowerCase());
+		if (value !== null) merged.set(name.toLowerCase(), [name, value]);
+	}
+	return Object.fromEntries(merged.values());
 }
 
 /**
