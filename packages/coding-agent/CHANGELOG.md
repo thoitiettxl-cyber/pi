@@ -5,6 +5,7 @@
 ### Added
 
 - Added `compat.supportsStrictMode` for `google-generative-ai` and `google-vertex` models in `models.json`, so Gemini 3+ models served under IDs without the version can use strict tools ([#12321](https://github.com/earendil-works/pi/issues/12321))
+- Added the `custom-provider-devin` example extension: a `devin` provider with API key auth (`/login devin` or `DEVIN_API_KEY`) that runs prompts as Devin sessions through the Devin API
 
 ### Fixed
 
