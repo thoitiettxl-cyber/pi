@@ -510,7 +510,7 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 			continue;
 		}
 		if (options.stripNullableKeyword && key === "nullable") continue;
-		if (key === "const") {
+		if (!options.insideSchemaMap && key === "const") {
 			constValue = entry;
 			continue;
 		}
