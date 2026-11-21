@@ -652,7 +652,7 @@ function buildDevinChatRequest(
 	turn: DevinTurn,
 	assignment: ModelAssignment | undefined,
 ) {
-	const level = options?.reasoning ?? model.devin?.defaultLevel ?? "off";
+	const level = options?.reasoning ?? "off";
 	const sampling = {
 		...model.samplingParams,
 		...model.samplingParamsByThinkingLevel?.[level],

@@ -226,7 +226,10 @@ describe("Cascade stream", () => {
 	});
 
 	it("surfaces a model ERROR stop even without an error trailer or with tool output", async () => {
-		for (const deltaToolCalls of [[], [create(ChatToolCallSchema, { id: "call", name: "lookup", argumentsJson: "{}" })]]) {
+		for (const deltaToolCalls of [
+			[],
+			[create(ChatToolCallSchema, { id: "call", name: "lookup", argumentsJson: "{}" })],
+		]) {
 			const stream = streamDevin(model, context, {
 				apiKey: "a.b.c",
 				fetch: transport([
@@ -391,6 +394,29 @@ describe("Cascade stream", () => {
 		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch }).result();
 		expect(result.errorMessage).toBe("Devin auth error 403");
 		expect(() => streamDevin(model, context)).toThrow("API key missing");
+	});
+
+	it("routes undefined reasoning to Off instead of the account thinking default", async () => {
+		const routed: DevinModel = {
+			...model,
+			devin: {
+				defaultLevel: "high",
+				requestModelId: "default-high",
+				effortRouting: { off: "no-thinking", high: "thinking-high" },
+			},
+			samplingParamsByThinkingLevel: { off: { top_k: 10 }, high: { top_k: 80 } },
+		};
+		for (const reasoning of [undefined, "high"] as const) {
+			const result = await streamDevin(routed, context, {
+				apiKey: "a.b.c",
+				reasoning,
+				fetch: transport([frame({ deltaText: "ok" })], (request) => {
+					expect(request.chatModelUid).toBe(reasoning ? "thinking-high" : "no-thinking");
+					expect(request.configuration?.topK).toBe(reasoning ? 80n : 10n);
+				}),
+			}).result();
+			expect(result.stopReason).toBe("stop");
+		}
 	});
 
 	it("resolves model sampling defaults and payload replacements", async () => {
