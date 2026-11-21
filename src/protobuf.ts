@@ -2,7 +2,7 @@
 import { isRecord } from "./utils.ts";
 
 /**
- * High-performance, zero-builder protobuf wire codecs for @oh-my-pi/pi-catalog.
+ * High-performance, zero-builder protobuf wire codecs for the Devin Cascade schemas.
  *
  * Schemas are declared as static IR descriptors with near-zero module load overhead
  * and lazy compilation on first encode/decode/create invocation.

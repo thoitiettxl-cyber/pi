@@ -10,10 +10,11 @@ import {
 	MetadataSchema,
 	ModelDimensionKind,
 } from "./devin-proto.ts";
+import { fetchDevin } from "./fetch.ts";
 import type { DevinCompat, FetchImpl, ModelCost, ModelSpec } from "./models.ts";
 import { Effort, THINKING_EFFORTS } from "./models.ts";
 import { create, toBinary } from "./protobuf.ts";
-import { decodeDevinUnaryMessage } from "./unary.ts";
+import { decodeDevinUnaryMessage, readDevinUnaryBody } from "./unary.ts";
 import { slugify } from "./utils.ts";
 import { DEVIN_DEFAULT_BASE_URL, devinDiscoveryMetadata } from "./wire.ts";
 
@@ -309,21 +310,21 @@ export interface DevinModelDiscoveryOptions {
  * Fetches Devin models through the `GetCliModelConfigs` unary Connect RPC and
  * normalizes them into canonical model entries.
  *
- * Returns `null` on request/decode failures.
- * Returns `[]` only when the endpoint responds successfully with no usable models.
+ * Throws on request, decode and empty-catalog failures so `Models.refresh()`
+ * reports them; the caller keeps its previous catalog.
  */
-export async function fetchDevinModels(
-	options: DevinModelDiscoveryOptions,
-): Promise<ModelSpec<"devin-agent">[] | null> {
+export async function fetchDevinModels(options: DevinModelDiscoveryOptions): Promise<ModelSpec<"devin-agent">[]> {
 	// `GetCliModelConfigs` returns the full per-account catalog (600+ configs)
-	// and often takes 7-15s to send headers; 5s silently fell back to the seed.
-	// 15s matches coding-agent's runtime discovery bound.
+	// and often takes 7-15s to send headers.
 	const timeoutMs = options.timeoutMs ?? 15_000;
 	const resolvedBaseUrl = options.baseUrl ?? DEVIN_DEFAULT_BASE_URL;
 	const requestUrl = `${resolvedBaseUrl.replace(/\/+$/, "")}${DEVIN_GET_CLI_MODEL_CONFIGS_PATH}`;
 
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
+	const timer = setTimeout(
+		() => controller.abort(new Error(`Devin model discovery timed out after ${timeoutMs} ms`)),
+		timeoutMs,
+	);
 	const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
 
 	const request = create(GetCliModelConfigsRequestSchema, {
@@ -334,33 +335,42 @@ export async function fetchDevinModels(
 	});
 	let payload: Uint8Array;
 	try {
-		const response = await (options.fetch ?? fetch)(requestUrl, {
-			method: "POST",
-			headers: {
-				"content-type": "application/proto",
-				"connect-protocol-version": "1",
-				accept: "*/*",
-			},
-			body: toBinary(GetCliModelConfigsRequestSchema, request),
-			signal,
-		});
-		if (!response.ok) return null;
-		payload = new Uint8Array(await response.arrayBuffer());
-	} catch {
-		return null;
+		let response: Response;
+		try {
+			response = await fetchDevin(
+				options.fetch ?? fetch,
+				requestUrl,
+				{
+					method: "POST",
+					headers: {
+						"content-type": "application/proto",
+						"connect-protocol-version": "1",
+						accept: "*/*",
+					},
+					body: toBinary(GetCliModelConfigsRequestSchema, request),
+				},
+				{ signal },
+			);
+		} catch (error) {
+			options.signal?.throwIfAborted();
+			if (controller.signal.aborted) throw controller.signal.reason;
+			throw new Error(`Devin model discovery request failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => {});
+			throw new Error(`Devin model discovery failed (HTTP ${response.status})`);
+		}
+		payload = await readDevinUnaryBody(response);
 	} finally {
 		clearTimeout(timer);
 	}
 
 	const decoded = decodeDevinUnaryMessage(GetCliModelConfigsResponseSchema, payload);
-	if (!decoded) return null;
+	if (!decoded) throw new Error("Devin model discovery returned an undecodable response");
 	const models = normalizeDevinModels(decoded, options.baseUrl);
-	if (models.length === 0) {
-		// The backend gates the native catalog on the pinned client identity;
-		// an empty-but-200 response is the failure signature of a stale pin.
-
-		return null;
-	}
+	// The backend gates the native catalog on the pinned client identity;
+	// an empty-but-200 response is the failure signature of a stale pin.
+	if (models.length === 0) throw new Error("Devin model discovery returned no usable models");
 	return models;
 }
 
@@ -371,7 +381,7 @@ export async function fetchDevinModels(
  * image was attached, while SWE-1.7, SWE-1.7 Lightning, and every proxied
  * frontier model (Claude/Gemini/GPT/Kimi) read the same field correctly.
  * Declaring text-only lets clients use their image fallback path instead of
- * silently losing attachments ([#6072](https://github.com/can1357/oh-my-pi/issues/6072)).
+ * silently losing attachments.
  * Remove entries if Devin ever wires SWE-1.6 vision up. SWE-1.6 Fast is gone
  * from Devin's own catalog but stays here for a Cascade host that still lists it.
  */
@@ -446,11 +456,10 @@ function devinFusionLeadUid(uid: string, liveUids: ReadonlyMap<string, unknown>)
 }
 
 /**
- * Point a Fusion pairing at its lead. omp runs only the lead (the sidekick is
+ * Point a Fusion pairing at its lead. Only the lead runs (the sidekick is
  * paired by the native client), so the limits and pricing a caller budgets
  * against are the lead's, not the composite card's. The composite uid names no
- * model, so `buildModel` resolves the row under its `requestModelId` and the
- * lead's catalog rules (cache-write rate, long-context tier) apply there.
+ * model, so requests use the lead's `requestModelId`.
  */
 function routeDevinFusionLead(spec: ModelSpec<"devin-agent">, lead: ModelSpec<"devin-agent">): void {
 	spec.requestModelId = lead.id;

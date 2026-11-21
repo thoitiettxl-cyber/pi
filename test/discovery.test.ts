@@ -105,14 +105,19 @@ describe("Devin model discovery", () => {
 		expect(await fetchDevinModels({ apiKey: "key", fetch })).toHaveLength(3);
 	});
 
-	it("returns null on empty, malformed and HTTP-error discovery responses", async () => {
-		for (const reply of [
-			new Response(new Uint8Array()),
-			new Response(new Uint8Array([255])),
-			new Response("", { status: 500 }),
-		]) {
-			expect(await fetchDevinModels({ fetch: async () => reply })).toBeNull();
+	it("reports empty, malformed, HTTP-error and redirected discovery responses", async () => {
+		for (const [reply, message] of [
+			[new Response(new Uint8Array()), "no usable models"],
+			[new Response(new Uint8Array([255])), "undecodable"],
+			[new Response("", { status: 500 }), "HTTP 500"],
+		] as const) {
+			await expect(fetchDevinModels({ fetch: async () => reply })).rejects.toThrow(message);
 		}
+		const redirect = vi.fn<typeof fetch>(async (_url, init) => {
+			expect(init?.redirect).toBe("error");
+			throw new TypeError("fetch failed");
+		});
+		await expect(fetchDevinModels({ fetch: redirect })).rejects.toThrow("request failed: fetch failed");
 		expect(normalizeDevinModels(create(GetCliModelConfigsResponseSchema), undefined)).toEqual([]);
 	});
 
@@ -134,7 +139,7 @@ describe("Devin model discovery", () => {
 		expect(publication?.persist?.models).toHaveLength(3);
 		const before = provider.getModels();
 		vi.stubGlobal("fetch", async () => new Response("", { status: 500 }));
-		await provider.refreshModels?.(refresh);
+		await expect(provider.refreshModels?.(refresh)).rejects.toThrow("HTTP 500");
 		expect(provider.getModels()).toBe(before);
 		const restored = devinProvider();
 		await restored.refreshModels?.({ ...refresh, allowNetwork: false, stored: publication?.persist ?? undefined });

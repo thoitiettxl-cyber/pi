@@ -476,6 +476,53 @@ describe("Cascade stream", () => {
 		expect(result.errorMessage).toContain("timed out after 20 ms");
 	});
 
+	it("rejects custom API servers with a query or fragment", async () => {
+		const fetch: typeof globalThis.fetch = async () =>
+			new Response(
+				toBinary(
+					GetUserJwtResponseSchema,
+					create(GetUserJwtResponseSchema, { userJwt: "user-jwt", customApiServerUrl: "https://x.invalid/?a=" }),
+				),
+			);
+		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch }).result();
+		expect(result.errorMessage).toContain("query or fragment");
+	});
+
+	it("disables redirects and retries transient failures up to maxRetries", async () => {
+		const base = transport([frame({ deltaText: "ok" })]);
+		let failures = 1;
+		const fetch = vi.fn<typeof globalThis.fetch>(async (url, init) => {
+			expect(init?.redirect).toBe("error");
+			if (String(url).endsWith("/GetUserJwt") && failures-- > 0)
+				return new Response("", { status: 503, headers: { "retry-after-ms": "1" } });
+			return base(url, init);
+		});
+		expect((await streamDevin(model, context, { apiKey: "a.b.c", fetch }).result()).errorMessage).toBe(
+			"Devin auth error 503",
+		);
+		failures = 1;
+		const retried = await streamDevin(model, context, { apiKey: "a.b.c", fetch, maxRetries: 1 }).result();
+		expect(retried.stopReason).toBe("stop");
+	});
+
+	it("re-arms the idle timeout for every request of a routed turn", async () => {
+		const router: DevinModel = { ...model, id: "adaptive", devin: { modelRouter: true } };
+		const base = transport([frame({ deltaText: "routed" })], undefined, true);
+		const slow: typeof globalThis.fetch = async (url, init) => {
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			return base(url, init);
+		};
+		const result = await streamDevin(router, context, { apiKey: "a.b.c", sessionId: "session", fetch: slow, timeoutMs: 50 }).result();
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("stop");
+	});
+
+	it("caps unary bodies after HTTP-level decompression", async () => {
+		const fetch: typeof globalThis.fetch = async () => new Response(new Uint8Array(17 * 1024 * 1024));
+		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch }).result();
+		expect(result.errorMessage).toContain("exceeds 16777216-byte cap");
+	});
+
 	it("caps the inflated size of compressed frames", async () => {
 		const bomb = frameConnectMessage(gzipSync(Buffer.alloc(17 * 1024 * 1024)), 1);
 		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch: transport([bomb]) }).result();

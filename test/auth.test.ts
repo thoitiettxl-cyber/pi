@@ -94,9 +94,15 @@ describe("Devin authentication", () => {
 
 	it("parses simple TOML strings and validates optional host", async () => {
 		expect(
-			parseCredentials('# comment\nwindsurf_api_key = "key" # inline\napi_server_url = "https://server.codeium.com"'),
-		).toBe("key");
-		expect(parseCredentials("windsurf_api_key = 'key'")).toBe("key");
+			parseCredentials('# comment\nwindsurf_api_key = "key" # inline\napi_server_url = "https://server.codeium.com/"'),
+		).toEqual({ key: "key", apiServerUrl: "https://server.codeium.com" });
+		expect(parseCredentials("windsurf_api_key = 'key'")).toEqual({ key: "key" });
+		expect(() =>
+			parseCredentials('windsurf_api_key = "key"\napi_server_url = "http://server.enterprise.windsurf.com"'),
+		).toThrow("non-HTTPS");
+		expect(() =>
+			parseCredentials('windsurf_api_key = "key"\napi_server_url = "https://server.codeium.com/?x=1"'),
+		).toThrow("query");
 		expect(() => parseCredentials("")).toThrow("no windsurf_api_key");
 		expect(() => parseCredentials('windsurf_api_key = "key"\napi_server_url = "https://evil.invalid"')).toThrow(
 			"unsupported",
@@ -111,6 +117,18 @@ describe("Devin authentication", () => {
 			"/home/test/.local/share/devin/credentials.toml",
 			"/home/test/Library/Application Support/devin/credentials.toml",
 		]);
+	});
+
+	it("routes enterprise CLI credentials to their API server", async () => {
+		const credential = tokenCredential("key", "https://server.enterprise.windsurf.com");
+		expect(await devinOAuth.toAuth(credential)).toEqual({
+			apiKey: "key",
+			baseUrl: "https://server.enterprise.windsurf.com",
+		});
+		expect(await devinOAuth.toAuth(tokenCredential("key"))).toEqual({ apiKey: "key" });
+		await expect(devinOAuth.toAuth({ ...credential, apiServerUrl: "https://evil.invalid" })).rejects.toThrow(
+			"unsupported",
+		);
 	});
 
 	it("encodes session tokens but leaves API keys and already-prefixed tokens alone", () => {
