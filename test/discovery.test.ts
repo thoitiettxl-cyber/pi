@@ -13,6 +13,7 @@ import {
 	ModelInfoSchema,
 } from "../src/devin-proto.ts";
 import { fetchDevinModels, normalizeDevinModels } from "../src/discovery.ts";
+import { tokenCredential } from "../src/auth.ts";
 import { devinProvider } from "../src/index.ts";
 import { toModel } from "../src/models.ts";
 import { create, fromBinary, toBinary } from "../src/protobuf.ts";
@@ -144,6 +145,29 @@ describe("Devin model discovery", () => {
 		const restored = devinProvider();
 		await restored.refreshModels?.({ ...refresh, allowNetwork: false, stored: publication?.persist ?? undefined });
 		expect(restored.getModels()).toEqual(before);
+	});
+
+	it("discovers through the CLI API server without persisting it on models", async () => {
+		const urls: string[] = [];
+		vi.stubGlobal("fetch", async (url: string) => {
+			urls.push(url);
+			return new Response(toBinary(GetCliModelConfigsResponseSchema, response));
+		});
+		const provider = devinProvider();
+		let publication: ModelsPublication | undefined;
+		await provider.refreshModels?.({
+			credential: tokenCredential("key", "https://server.enterprise.windsurf.com"),
+			allowNetwork: true,
+			signal: new AbortController().signal,
+			publish: async (value) => {
+				publication = value;
+				return true;
+			},
+		});
+		expect(urls[0]).toMatch(/^https:\/\/server\.enterprise\.windsurf\.com\//);
+		expect(new Set(publication?.persist?.models.map((model) => model.baseUrl))).toEqual(
+			new Set(["https://server.codeium.com"]),
+		);
 	});
 
 	it("exposes a synchronous seed before auth and ignores superseded publications", async () => {

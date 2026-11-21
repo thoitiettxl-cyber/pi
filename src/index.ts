@@ -4,6 +4,7 @@ import { credentialServerUrl, devinOAuth } from "./auth.ts";
 import { fetchDevinModels } from "./discovery.ts";
 import { type DevinModel, seedModels, toModel } from "./models.ts";
 import { type DevinOptions, streamDevin } from "./stream.ts";
+import { DEVIN_DEFAULT_BASE_URL } from "./wire.ts";
 
 export function devinProvider(): Provider {
 	let models: readonly DevinModel[] = seedModels;
@@ -31,10 +32,16 @@ export function devinProvider(): Provider {
 			const credential = context.credential;
 			const apiKey = credential?.type === "oauth" ? credential.access : (credential?.key ?? process.env.DEVIN_API_KEY);
 			if (!apiKey) return;
-			const baseUrl = (credential?.type === "oauth" ? credentialServerUrl(credential) : undefined) ?? context.baseUrl;
-			const specs = await fetchDevinModels({ apiKey, baseUrl, signal: context.signal });
+			const credentialBaseUrl = credential?.type === "oauth" ? credentialServerUrl(credential) : undefined;
+			const specs = await fetchDevinModels({
+				apiKey,
+				baseUrl: credentialBaseUrl ?? context.baseUrl,
+				signal: context.signal,
+			});
 			if (context.signal.aborted) return;
-			const refreshed = specs.map(toModel);
+			// The persisted catalog outlives this credential; `toAuth` supplies its server per request.
+			const modelBaseUrl = context.baseUrl ?? DEVIN_DEFAULT_BASE_URL;
+			const refreshed = specs.map((spec) => toModel(credentialBaseUrl ? { ...spec, baseUrl: modelBaseUrl } : spec));
 			await context.publish({
 				persist: { models: refreshed, checkedAt: Date.now() },
 				update: () => {
