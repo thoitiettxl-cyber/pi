@@ -139,7 +139,7 @@ describe("custom-provider-devin example", () => {
 		expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
 	});
 
-	it("ends the turn without a reply when the session has stopped", async () => {
+	it("reports a session that stopped without replying as an error", async () => {
 		stubDevinApi([
 			{ session_id: "devin-1", url: "https://app.devin.ai/sessions/1" },
 			{ session_id: "devin-1", status_enum: "expired", messages: [] },
@@ -147,8 +147,27 @@ describe("custom-provider-devin example", () => {
 
 		const result = await run({ messages: [{ role: "user", content: "Hi", timestamp: 1 }] });
 
-		expect(result.stopReason).toBe("stop");
-		expect(result.content).toEqual([{ type: "text", text: "Devin session: https://app.devin.ai/sessions/1" }]);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Devin session devin-1 is expired and did not reply");
+	});
+
+	it("reports a follow-up the session did not accept as an error", async () => {
+		const calls = stubDevinApi([
+			{ session_id: "devin-1", status_enum: "finished", messages: [] },
+			{ detail: "Session is suspended" },
+		]);
+
+		const result = await run({
+			messages: [
+				{ role: "user", content: "Hi", timestamp: 1 },
+				devinReply("Hello", "devin-1"),
+				{ role: "user", content: "More", timestamp: 2 },
+			],
+		});
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Devin did not accept the message: Session is suspended");
+		expect(calls).toHaveLength(2);
 	});
 
 	it("reports Devin API failures as errors", async () => {

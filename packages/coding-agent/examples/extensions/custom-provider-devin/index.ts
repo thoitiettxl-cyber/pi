@@ -49,6 +49,9 @@ interface CreatedDevinSession {
 	url: string;
 }
 
+/** `POST /sessions/{id}/message` answers null, or a detail when the session cannot take messages. */
+type MessageSentResponse = { detail?: string } | null;
+
 interface DevinSession {
 	session_id: string;
 	status_enum?: string | null;
@@ -142,6 +145,9 @@ export function streamDevin(
 				replies = devinReplies(session);
 			}
 
+			if (replies.length === seen) {
+				throw new Error(`Devin session ${sessionId} is ${session.status_enum} and did not reply`);
+			}
 			const text = [...replies.slice(seen), ...(sessionUrl ? [`Devin session: ${sessionUrl}`] : [])].join("\n\n");
 			output.content.push({ type: "text", text: "" });
 			stream.push({ type: "text_start", contentIndex: 0, partial: output });
@@ -226,8 +232,11 @@ function devinClient(baseUrl: string, apiKey: string, signal: AbortSignal | unde
 	return {
 		createSession: (prompt: string) => request<CreatedDevinSession>("POST", "/sessions", { prompt }),
 		getSession: (sessionId: string) => request<DevinSession>("GET", `/sessions/${encodeURIComponent(sessionId)}`),
-		sendMessage: (sessionId: string, message: string) =>
-			request<unknown>("POST", `/sessions/${encodeURIComponent(sessionId)}/message`, { message }),
+		sendMessage: async (sessionId: string, message: string) => {
+			const path = `/sessions/${encodeURIComponent(sessionId)}/message`;
+			const sent = await request<MessageSentResponse>("POST", path, { message });
+			if (sent?.detail) throw new Error(`Devin did not accept the message: ${sent.detail}`);
+		},
 	};
 }
 
