@@ -22,7 +22,7 @@ function stubDevinApi(responses: unknown[]): Call[] {
 		});
 		const next = responses.shift();
 		if (next === undefined) throw new Error(`Unexpected request ${init.method} ${url}`);
-		return new Response(JSON.stringify(next), { status: 200 });
+		return next instanceof Response ? next : new Response(JSON.stringify(next), { status: 200 });
 	});
 	return calls;
 }
@@ -123,6 +123,20 @@ describe("custom-provider-devin example", () => {
 			url: "https://api.devin.ai/v1/sessions/devin-1/message",
 			body: { message: "Also add tests" },
 		});
+	});
+
+	it("keeps polling the submitted session after a transient polling failure", async () => {
+		const calls = stubDevinApi([
+			{ session_id: "devin-1", url: "https://app.devin.ai/sessions/1" },
+			new Response("bad gateway", { status: 502 }),
+			{ session_id: "devin-1", status_enum: "blocked", messages: [{ type: "devin_message", message: "Done" }] },
+		]);
+
+		const result = await run({ messages: [{ role: "user", content: "Hi", timestamp: 1 }] });
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "Done\n\nDevin session: https://app.devin.ai/sessions/1" }]);
+		expect(calls.filter((call) => call.method === "POST")).toHaveLength(1);
 	});
 
 	it("ends the turn without a reply when the session has stopped", async () => {

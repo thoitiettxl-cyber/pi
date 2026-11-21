@@ -37,6 +37,7 @@ export const DEVIN_BASE_URL = "https://api.devin.ai/v1";
 const POLL_INTERVAL_MS = 5_000;
 const TURN_END_STATUSES = new Set(["blocked", "finished", "expired"]);
 const STOPPED_STATUSES = new Set(["finished", "expired"]);
+const MAX_POLL_FAILURES = 3;
 
 interface DevinSessionMessage {
 	type: string;
@@ -133,11 +134,11 @@ export function streamDevin(
 			output.responseId = sessionId;
 			stream.push({ type: "start", partial: output });
 
-			let session = await api.getSession(sessionId);
+			let session = await pollSession(() => api.getSession(sessionId), pollIntervalMs, signal);
 			let replies = devinReplies(session);
 			while (!isTurnOver(session, replies.length > seen)) {
 				await sleep(pollIntervalMs, signal);
-				session = await api.getSession(sessionId);
+				session = await pollSession(() => api.getSession(sessionId), pollIntervalMs, signal);
 				replies = devinReplies(session);
 			}
 
@@ -188,6 +189,25 @@ function devinReplies(session: DevinSession): string[] {
 function isTurnOver(session: DevinSession, hasNewReply: boolean): boolean {
 	const status = session.status_enum ?? "";
 	return STOPPED_STATUSES.has(status) || (hasNewReply && TURN_END_STATUSES.has(status));
+}
+
+/**
+ * Retries transient polling failures. The prompt was already submitted, so failing the turn here
+ * would make pi's auto-retry submit it again (a second Devin session on the first turn).
+ */
+async function pollSession(
+	getSession: () => Promise<DevinSession>,
+	pollIntervalMs: number,
+	signal: AbortSignal | undefined,
+): Promise<DevinSession> {
+	for (let failures = 1; ; failures++) {
+		try {
+			return await getSession();
+		} catch (error) {
+			if (signal?.aborted || failures >= MAX_POLL_FAILURES) throw error;
+			await sleep(pollIntervalMs, signal);
+		}
+	}
 }
 
 function devinClient(baseUrl: string, apiKey: string, signal: AbortSignal | undefined) {
