@@ -505,7 +505,7 @@ export const streamDevin = (
 			}
 
 			const doneReason: "stop" | "length" | "toolUse" =
-				toolBlocks.size > 0 ? "toolUse" : latestStopReason === StopReason.MAX_TOKENS ? "length" : "stop";
+				latestStopReason === StopReason.MAX_TOKENS ? "length" : toolBlocks.size > 0 ? "toolUse" : "stop";
 			output.stopReason = doneReason;
 
 			calculateCost(model, output.usage);

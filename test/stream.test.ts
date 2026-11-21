@@ -181,6 +181,18 @@ describe("Cascade stream", () => {
 		expect(limited.stopReason).toBe("length");
 	});
 
+	it("preserves MAX_TOKENS when a tool call is truncated", async () => {
+		const result = await streamDevin(model, context, {
+			apiKey: "a.b.c",
+			fetch: transport([
+				frame({ deltaToolCalls: [create(ChatToolCallSchema, { id: "call", name: "lookup", argumentsJson: '{"x":' })] }),
+				frame({ stopReason: StopReason.MAX_TOKENS }),
+			]),
+		}).result();
+		expect(result.stopReason).toBe("length");
+		expect(result.content[0]).toMatchObject({ type: "toolCall", id: "call" });
+	});
+
 	it("surfaces compressed trailer errors with details", async () => {
 		const trailer = {
 			error: { code: "permission_denied", message: "not allowed", details: [{ type: "debug", debug: "detail" }] },
