@@ -5,7 +5,7 @@ export interface DevinFetchOptions {
 	signal?: AbortSignal;
 	/** Retries after network failures and 408/409/429/5xx responses (default 0). */
 	maxRetries?: number;
-	/** Longest server-requested retry delay to honor; longer ones return the response (default 60000, 0 = no cap). */
+	/** Longest `retry-after` delay to honor; longer ones return the response (default 60000, 0 = no cap). */
 	maxRetryDelayMs?: number;
 	/** Called before every attempt. */
 	onAttempt?: () => void;
@@ -36,12 +36,12 @@ export async function fetchDevin(
 			continue;
 		}
 		if (attempt >= maxRetries || !isRetryableStatus(response.status)) return response;
-		const delayMs = serverRetryDelayMs(response.headers) ?? backoffMs(attempt);
+		const serverDelayMs = serverRetryDelayMs(response.headers);
 		const maxDelayMs = options.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
-		if (maxDelayMs > 0 && delayMs > maxDelayMs) return response;
+		if (serverDelayMs !== undefined && maxDelayMs > 0 && serverDelayMs > maxDelayMs) return response;
 		await response.body?.cancel().catch(() => {});
 		options.onRetryWait?.();
-		await abortableSleep(delayMs, options.signal);
+		await abortableSleep(serverDelayMs ?? backoffMs(attempt), options.signal);
 	}
 }
 

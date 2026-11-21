@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { type AssistantMessage, isContextOverflow, type TranscriptContext } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -505,6 +507,17 @@ describe("Cascade stream", () => {
 		expect(retried.stopReason).toBe("stop");
 	});
 
+	it("applies maxRetryDelayMs only to server-requested delays", async () => {
+		const base = transport([frame({ deltaText: "ok" })]);
+		let failures = 1;
+		const fetch: typeof globalThis.fetch = async (url, init) => {
+			if (String(url).endsWith("/GetUserJwt") && failures-- > 0) return new Response("", { status: 503 });
+			return base(url, init);
+		};
+		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch, maxRetries: 1, maxRetryDelayMs: 1 }).result();
+		expect(result.stopReason).toBe("stop");
+	});
+
 	it("re-arms the idle timeout for every request of a routed turn", async () => {
 		const router: DevinModel = { ...model, id: "adaptive", devin: { modelRouter: true } };
 		const base = transport([frame({ deltaText: "routed" })], undefined, true);
@@ -521,6 +534,23 @@ describe("Cascade stream", () => {
 		const fetch: typeof globalThis.fetch = async () => new Response(new Uint8Array(17 * 1024 * 1024));
 		const result = await streamDevin(model, context, { apiKey: "a.b.c", fetch }).result();
 		expect(result.errorMessage).toContain("exceeds 16777216-byte cap");
+	});
+
+	it("caps unary bodies inflated by native fetch from HTTP gzip", async () => {
+		const bomb = gzipSync(new Uint8Array(17 * 1024 * 1024));
+		const server = createServer((_request, response) => {
+			response.writeHead(200, { "content-encoding": "gzip", "content-type": "application/proto" });
+			response.end(bomb);
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const { port } = server.address() as AddressInfo;
+			const local: DevinModel = { ...model, baseUrl: `http://127.0.0.1:${port}` };
+			const result = await streamDevin(local, context, { apiKey: "a.b.c" }).result();
+			expect(result.errorMessage).toContain("exceeds 16777216-byte cap");
+		} finally {
+			server.close();
+		}
 	});
 
 	it("caps the inflated size of compressed frames", async () => {
