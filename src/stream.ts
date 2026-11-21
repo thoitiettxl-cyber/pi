@@ -496,6 +496,12 @@ export const streamDevin = (
 				reader.releaseLock();
 			}
 
+			if (latestStopReason === StopReason.ERROR) {
+				throw new DevinResponseError("Devin model returned StopReason.ERROR", {
+					provider: model.provider,
+					kind: "model",
+				});
+			}
 			endTextBlock();
 			endThinkingBlock();
 			for (const [id, block] of toolBlocks) {

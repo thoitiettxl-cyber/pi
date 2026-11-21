@@ -225,6 +225,26 @@ describe("Cascade stream", () => {
 		expect(result.errorMessage).toContain("debug: detail");
 	});
 
+	it("surfaces a model ERROR stop even without an error trailer or with tool output", async () => {
+		for (const deltaToolCalls of [[], [create(ChatToolCallSchema, { id: "call", name: "lookup", argumentsJson: "{}" })]]) {
+			const stream = streamDevin(model, context, {
+				apiKey: "a.b.c",
+				fetch: transport([
+					frame({ deltaText: "partial", deltaToolCalls }),
+					frame({ stopReason: StopReason.ERROR }),
+					frameConnectMessage(Buffer.from("{}"), 2),
+				]),
+			});
+			const events = [];
+			for await (const event of stream) events.push(event.type);
+			const result = await stream.result();
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toContain("StopReason.ERROR");
+			expect(events.at(-1)).toBe("error");
+			expect(events).not.toContain("done");
+		}
+	});
+
 	it("classifies only large shrinkable history as context overflow", async () => {
 		const trailer = frameConnectMessage(
 			Buffer.from(JSON.stringify({ error: { code: "invalid_argument", message: "an internal error occurred" } })),
