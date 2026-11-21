@@ -1,7 +1,5 @@
 // Ported from oh-my-pi (MIT)
 
-import { createRequire, findPackageJSON } from "node:module";
-import * as path from "node:path";
 import { promisify } from "node:util";
 import { gunzipSync, gzip } from "node:zlib";
 import {
@@ -25,7 +23,7 @@ import {
 	type TranscriptContext,
 	type UserMessage,
 } from "@earendil-works/pi-ai";
-import type { transformMessages as TransformMessages } from "@earendil-works/pi-ai/api/transform-messages";
+import { transformMessages } from "./transform-messages.ts";
 import {
 	CONNECT_COMPRESSED_FLAG,
 	CONNECT_END_STREAM_FLAG,
@@ -71,10 +69,6 @@ import {
 } from "./utils.ts";
 import { DEVIN_DEFAULT_BASE_URL, devinCliMetadata } from "./wire.ts";
 
-// pi's extension loader aliases the main pi-ai entry as a path prefix, including public subpaths.
-const { transformMessages }: { transformMessages: typeof TransformMessages } = createRequire(import.meta.url)(
-	path.join(path.dirname(findPackageJSON("@earendil-works/pi-ai", import.meta.url)!), "dist/api/transform-messages.js"),
-);
 /** Base host for Codeium/Windsurf's Cascade chat API (Connect protocol over HTTP/1.1). */
 export const DEVIN_API_URL = DEVIN_DEFAULT_BASE_URL;
 

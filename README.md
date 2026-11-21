@@ -129,5 +129,7 @@ test uses a loopback HTTP callback. Tests do not call Devin.
 
 ## License
 
-MIT. Ported modules carry `Ported from oh-my-pi (MIT)`; see LICENSE for the full
-upstream copyright and permission notices.
+MIT. Ported modules carry `Ported from oh-my-pi (MIT)`. Transcript normalization
+is vendored from pi (MIT), so clean installations need only the pi root imports
+provided by the extension loader. See LICENSE for the full copyright and
+permission notices.
