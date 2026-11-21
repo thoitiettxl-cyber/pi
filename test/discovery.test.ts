@@ -13,6 +13,7 @@ import {
 	ModelInfoSchema,
 } from "../src/devin-proto.ts";
 import { fetchDevinModels, normalizeDevinModels } from "../src/discovery.ts";
+import { tokenCredential } from "../src/auth.ts";
 import { devinProvider } from "../src/index.ts";
 import { toModel } from "../src/models.ts";
 import { create, fromBinary, toBinary } from "../src/protobuf.ts";
@@ -105,14 +106,19 @@ describe("Devin model discovery", () => {
 		expect(await fetchDevinModels({ apiKey: "key", fetch })).toHaveLength(3);
 	});
 
-	it("returns null on empty, malformed and HTTP-error discovery responses", async () => {
-		for (const reply of [
-			new Response(new Uint8Array()),
-			new Response(new Uint8Array([255])),
-			new Response("", { status: 500 }),
-		]) {
-			expect(await fetchDevinModels({ fetch: async () => reply })).toBeNull();
+	it("reports empty, malformed, HTTP-error and redirected discovery responses", async () => {
+		for (const [reply, message] of [
+			[new Response(new Uint8Array()), "no usable models"],
+			[new Response(new Uint8Array([255])), "undecodable"],
+			[new Response("", { status: 500 }), "HTTP 500"],
+		] as const) {
+			await expect(fetchDevinModels({ fetch: async () => reply })).rejects.toThrow(message);
 		}
+		const redirect = vi.fn<typeof fetch>(async (_url, init) => {
+			expect(init?.redirect).toBe("error");
+			throw new TypeError("fetch failed");
+		});
+		await expect(fetchDevinModels({ fetch: redirect })).rejects.toThrow("request failed: fetch failed");
 		expect(normalizeDevinModels(create(GetCliModelConfigsResponseSchema), undefined)).toEqual([]);
 	});
 
@@ -134,11 +140,34 @@ describe("Devin model discovery", () => {
 		expect(publication?.persist?.models).toHaveLength(3);
 		const before = provider.getModels();
 		vi.stubGlobal("fetch", async () => new Response("", { status: 500 }));
-		await provider.refreshModels?.(refresh);
+		await expect(provider.refreshModels?.(refresh)).rejects.toThrow("HTTP 500");
 		expect(provider.getModels()).toBe(before);
 		const restored = devinProvider();
 		await restored.refreshModels?.({ ...refresh, allowNetwork: false, stored: publication?.persist ?? undefined });
 		expect(restored.getModels()).toEqual(before);
+	});
+
+	it("discovers through the CLI API server without persisting it on models", async () => {
+		const urls: string[] = [];
+		vi.stubGlobal("fetch", async (url: string) => {
+			urls.push(url);
+			return new Response(toBinary(GetCliModelConfigsResponseSchema, response));
+		});
+		const provider = devinProvider();
+		let publication: ModelsPublication | undefined;
+		await provider.refreshModels?.({
+			credential: tokenCredential("key", "https://server.enterprise.windsurf.com"),
+			allowNetwork: true,
+			signal: new AbortController().signal,
+			publish: async (value) => {
+				publication = value;
+				return true;
+			},
+		});
+		expect(urls[0]).toMatch(/^https:\/\/server\.enterprise\.windsurf\.com\//);
+		expect(new Set(publication?.persist?.models.map((model) => model.baseUrl))).toEqual(
+			new Set(["https://server.codeium.com"]),
+		);
 	});
 
 	it("exposes a synchronous seed before auth and ignores superseded publications", async () => {

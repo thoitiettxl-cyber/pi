@@ -6,9 +6,17 @@ import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "@earen
 import { browserCode } from "./callback.ts";
 import { generatePKCE } from "./pkce.ts";
 import { isRecord } from "./utils.ts";
+import { parseDevinServerUrl } from "./wire.ts";
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const REDIRECT_URI = "http://127.0.0.1:59653/callback";
+const DEVIN_CLI_API_HOSTS = ["server.codeium.com", "server.enterprise.windsurf.com"];
+
+/** Key and optional API server read from the Devin CLI's `credentials.toml`. */
+export interface DevinCliCredentials {
+	key: string;
+	apiServerUrl?: string;
+}
 
 export const devinOAuth: OAuthAuth = {
 	name: "Devin",
@@ -23,7 +31,10 @@ export const devinOAuth: OAuthAuth = {
 			],
 		});
 		interaction.signal.throwIfAborted();
-		if (method === "cli") return tokenCredential(await readDevinCliCredentials(devinCliCredentialPaths()));
+		if (method === "cli") {
+			const cli = await readDevinCliCredentials(devinCliCredentialPaths());
+			return tokenCredential(cli.key, cli.apiServerUrl);
+		}
 		if (method !== "browser") throw new Error("Unknown Devin login method");
 		return loginBrowser(interaction);
 	},
@@ -32,17 +43,27 @@ export const devinOAuth: OAuthAuth = {
 		if (credential.expires <= Date.now()) throw new Error("Devin credentials expired. Run /login again.");
 		return credential;
 	},
-	toAuth: async (credential) => ({ apiKey: credential.access }),
+	toAuth: async (credential) => {
+		const baseUrl = credentialServerUrl(credential);
+		return { apiKey: credential.access, ...(baseUrl ? { baseUrl } : {}) };
+	},
 };
 
-export function tokenCredential(token: string): OAuthCredential {
+/** The API server stored with a Devin CLI credential, re-validated because auth storage is a trust boundary. */
+export function credentialServerUrl(credential: OAuthCredential): string | undefined {
+	if (credential.apiServerUrl === undefined) return undefined;
+	if (typeof credential.apiServerUrl !== "string") throw new Error("Invalid Devin API server URL in stored credentials");
+	return cliServerUrl(credential.apiServerUrl, "Stored Devin credentials");
+}
+
+export function tokenCredential(token: string, apiServerUrl?: string): OAuthCredential {
 	let expires = Date.now() + YEAR_MS;
 	try {
 		const payload: unknown = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
 		if (isRecord(payload) && typeof payload.exp === "number" && Number.isFinite(payload.exp))
 			expires = payload.exp * 1000;
 	} catch {}
-	return { type: "oauth", access: token, refresh: token, expires };
+	return { type: "oauth", access: token, refresh: token, expires, ...(apiServerUrl ? { apiServerUrl } : {}) };
 }
 
 export async function loginBrowser(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
@@ -95,7 +116,7 @@ export function devinCliCredentialPaths(
 	];
 }
 
-export async function readDevinCliCredentials(candidates: readonly string[]): Promise<string> {
+export async function readDevinCliCredentials(candidates: readonly string[]): Promise<DevinCliCredentials> {
 	for (const file of candidates) {
 		let text: string;
 		try {
@@ -109,7 +130,7 @@ export async function readDevinCliCredentials(candidates: readonly string[]): Pr
 	throw new Error("No Devin CLI credentials found. Run `devin auth login`, then retry.");
 }
 
-export function parseCredentials(text: string): string {
+export function parseCredentials(text: string): DevinCliCredentials {
 	const values: Record<string, string> = {};
 	for (const raw of text.split(/\r?\n/)) {
 		const line = raw.trim();
@@ -129,16 +150,12 @@ export function parseCredentials(text: string): string {
 	}
 	const key = values.windsurf_api_key?.trim();
 	if (!key) throw new Error("Devin CLI credentials have no windsurf_api_key. Run `devin auth login`, then retry.");
-	if (values.api_server_url) {
-		let host: string;
-		try {
-			host = new URL(values.api_server_url).host;
-		} catch {
-			throw new Error("Invalid Devin CLI API server URL");
-		}
-		if (!["server.codeium.com", "server.enterprise.windsurf.com"].includes(host)) {
-			throw new Error("Devin CLI credentials point at an unsupported API server");
-		}
-	}
-	return key;
+	if (!values.api_server_url) return { key };
+	return { key, apiServerUrl: cliServerUrl(values.api_server_url, "Devin CLI credentials") };
+}
+
+function cliServerUrl(value: string, source: string): string {
+	const url = parseDevinServerUrl(value, source);
+	if (!DEVIN_CLI_API_HOSTS.includes(new URL(url).host)) throw new Error(`${source} point at an unsupported API server`);
+	return url;
 }

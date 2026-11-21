@@ -1,9 +1,7 @@
 // Ported from oh-my-pi (MIT)
 /**
- * Devin (Codeium Cascade) wire constants shared by catalog discovery, the pi-ai
- * provider, and account usage. This module deliberately stays free of the
- * generated protobuf runtime so the synchronous model seed can import it
- * without pulling devin-gen into the boot path.
+ * Devin (Codeium Cascade) wire constants shared by auth, catalog discovery and
+ * chat streaming. Free of the protobuf runtime so auth can import it cheaply.
  */
 
 /** Base host for Codeium/Windsurf's Cascade API (Connect protocol over HTTP/1.1). */
@@ -18,7 +16,8 @@ const DEVIN_LOCALE = "en";
 /**
  * Released Devin CLI request identity. The backend gates behavior on this
  * tuple: `ideType: "chisel"` is what unlocks router assignment (`AssignModel`)
- * and the CLI model surface.
+ * and the CLI model surface. No local source reports the current CLI release,
+ * so the version stays pinned; bump it with {@link DEVIN_CLI_USER_AGENT}.
  */
 const DEVIN_CLI_METADATA = {
 	ideName: "devin-cli",
@@ -29,6 +28,9 @@ const DEVIN_CLI_METADATA = {
 	locale: DEVIN_LOCALE,
 	os: DEVIN_OS,
 } as const;
+
+/** HTTP `User-Agent` of the released Devin CLI (a connect-go client), sent on chat requests. */
+export const DEVIN_CLI_USER_AGENT = "connect-go/1.18.1 (go1.26.3)";
 
 /**
  * Native discovery identity. The Devin CLI announces itself as the `chisel`
@@ -54,7 +56,7 @@ function encodeDevinCredential(apiKey: string | undefined): string {
 
 /**
  * Fields for `Metadata` on released-CLI calls (`GetUserJwt`, `AssignModel`,
- * `GetChatMessage`, `GetUserStatus`).
+ * `GetChatMessage`).
  */
 export function devinCliMetadata(apiKey: string | undefined, userJwt = "") {
 	return {
@@ -70,4 +72,24 @@ export function devinDiscoveryMetadata(apiKey: string | undefined) {
 		apiKey: encodeDevinCredential(apiKey),
 		...DEVIN_DISCOVERY_METADATA,
 	};
+}
+
+/**
+ * Validate a Devin API server URL and return it without a trailing slash. The
+ * server receives the API key in every request body, so only plain HTTPS
+ * origins with an optional path are accepted (no credentials, query or fragment,
+ * which would also push the RPC path out of the pathname).
+ */
+export function parseDevinServerUrl(value: string, source: string): string {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new Error(`${source} returned an invalid API server URL`);
+	}
+	if (url.protocol !== "https:") throw new Error(`${source} returned a non-HTTPS API server URL`);
+	if (url.username || url.password || url.search || url.hash || value.includes("?") || value.includes("#")) {
+		throw new Error(`${source} returned an API server URL with credentials, query or fragment`);
+	}
+	return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
 }
