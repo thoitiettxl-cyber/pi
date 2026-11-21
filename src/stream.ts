@@ -320,6 +320,7 @@ export const streamDevin = (
 				},
 			});
 
+			let sawEndStream = false;
 			try {
 				for (;;) {
 					options?.signal?.throwIfAborted();
@@ -327,7 +328,9 @@ export const streamDevin = (
 					options?.signal?.throwIfAborted();
 
 					for (const { flags: flag, payload } of frameDecoder.decode(value)) {
+						if (sawEndStream) throw new Error("Unexpected Connect frame after end-stream");
 						if (flag & CONNECT_END_STREAM_FLAG) {
+							sawEndStream = true;
 							const trailerBytes = flag & CONNECT_COMPRESSED_FLAG ? gunzipSync(payload) : payload;
 							const trailerError = readConnectTrailerError(trailerBytes.toString("utf8").trim());
 							if (trailerError) {
@@ -490,6 +493,8 @@ export const streamDevin = (
 
 					if (done) break;
 				}
+				frameDecoder.finish();
+				if (!sawEndStream) throw new Error("Missing Connect end-stream trailer");
 			} finally {
 				options?.signal?.removeEventListener("abort", abortReader);
 				await reader.cancel().catch(() => {});

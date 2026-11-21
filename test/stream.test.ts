@@ -29,7 +29,12 @@ function frame(message: Partial<GetChatMessageResponse>, compressed = false): Bu
 	return frameConnectMessage(compressed ? gzipSync(bytes) : bytes, compressed ? 1 : 0);
 }
 
-function transport(frames: Buffer[], inspect?: (request: GetChatMessageRequest) => void, router = false): typeof fetch {
+function transport(
+	frames: Buffer[],
+	inspect?: (request: GetChatMessageRequest) => void,
+	router = false,
+	complete = true,
+): typeof fetch {
 	return vi.fn<typeof fetch>(async (input, init) => {
 		const url = String(input);
 		const body = new Uint8Array(await new Response(init?.body).arrayBuffer());
@@ -74,7 +79,10 @@ function transport(frames: Buffer[], inspect?: (request: GetChatMessageRequest) 
 			envelope.flags & 1 ? gunzipSync(envelope.payload) : envelope.payload,
 		);
 		inspect?.(request);
-		const bytes = Buffer.concat(frames);
+		const bytes = Buffer.concat([
+			...frames,
+			...(complete && !frames.some((frame) => frame[0] & 2) ? [frameConnectMessage(Buffer.from("{}"), 2)] : []),
+		]);
 		// Split headers and protobuf payloads across reads, not just whole frames.
 		return new Response(
 			new ReadableStream<Uint8Array>({
@@ -88,6 +96,32 @@ function transport(frames: Buffer[], inspect?: (request: GetChatMessageRequest) 
 }
 
 describe("Cascade stream", () => {
+	it("rejects EOF without a trailer, truncated headers/payloads and frames after the trailer", async () => {
+		const text = frame({ deltaText: "partial" });
+		const trailer = frameConnectMessage(Buffer.from("{}"), 2);
+		const cases = [
+			{ frames: [], error: "Missing Connect end-stream" },
+			{ frames: [text], error: "Missing Connect end-stream" },
+			{ frames: [text.subarray(0, 3)], error: "Incomplete Connect frame" },
+			{ frames: [text.subarray(0, text.length - 1)], error: "Incomplete Connect frame" },
+			{ frames: [text, trailer.subarray(0, trailer.length - 1)], error: "Incomplete Connect frame" },
+			{ frames: [trailer, text.subarray(0, 3)], error: "Incomplete Connect frame" },
+			{ frames: [trailer, text], error: "Unexpected Connect frame" },
+		];
+		for (const { frames, error } of cases) {
+			const stream = streamDevin(model, context, {
+				apiKey: "a.b.c",
+				fetch: transport(frames, undefined, false, false),
+			});
+			const events = [];
+			for await (const event of stream) events.push(event.type);
+			const result = await stream.result();
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toContain(error);
+			expect(events).not.toContain("done");
+		}
+	});
+
 	it("accumulates signature-only thinking fragments including an empty signed block", async () => {
 		for (const deltaThinking of ["plan", ""]) {
 			const result = await streamDevin(model, context, {

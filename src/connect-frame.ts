@@ -77,6 +77,11 @@ export class ConnectFrameDecoder {
 		}
 	}
 
+	/** Reject an HTTP EOF that cuts off a frame header or payload. */
+	finish(): void {
+		if (this.#buffered > 0) throw new Error("Incomplete Connect frame at end of stream");
+	}
+
 	/** Remove and return the next `size` buffered bytes; copies only when they span chunks. */
 	#take(size: number): Buffer {
 		this.#buffered -= size;
