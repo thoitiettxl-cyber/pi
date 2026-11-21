@@ -88,6 +88,25 @@ function transport(frames: Buffer[], inspect?: (request: GetChatMessageRequest) 
 }
 
 describe("Cascade stream", () => {
+	it("accumulates signature-only thinking fragments including an empty signed block", async () => {
+		for (const deltaThinking of ["plan", ""]) {
+			const result = await streamDevin(model, context, {
+				apiKey: "a.b.c",
+				fetch: transport([
+					frame({ deltaThinking, deltaSignature: "part-1" }),
+					frame({ deltaSignature: "-part-2" }),
+					frame({ deltaText: "answer" }),
+				]),
+			}).result();
+			expect(result.content[0]).toEqual({
+				type: "thinking",
+				thinking: deltaThinking,
+				thinkingSignature: "part-1-part-2",
+			});
+			expect(result.stopReason).toBe("stop");
+		}
+	});
+
 	it("decodes gzip text/thinking, signatures, token usage and cost with hooks", async () => {
 		const onPayload = vi.fn((payload: unknown) => payload);
 		const onResponse = vi.fn();

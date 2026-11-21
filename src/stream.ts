@@ -376,7 +376,7 @@ export const streamDevin = (
 						// from the uid AssignModel handed back (fallbacks, capacity routing).
 						if (msg.actualModelUid) output.responseModel = msg.actualModelUid;
 
-						if (msg.deltaThinking) {
+						if (msg.deltaThinking || msg.deltaSignature) {
 							markFirstToken();
 							const block: ThinkingContent = currentThinkingBlock ?? {
 								type: "thinking",
@@ -392,13 +392,17 @@ export const streamDevin = (
 								});
 							}
 							block.thinking += msg.deltaThinking;
-							if (msg.deltaSignature) block.thinkingSignature = msg.deltaSignature;
-							stream.push({
-								type: "thinking_delta",
-								contentIndex: blockIndices.get(block)!,
-								delta: msg.deltaThinking,
-								partial: output,
-							});
+							if (msg.deltaSignature) {
+								block.thinkingSignature = (block.thinkingSignature ?? "") + msg.deltaSignature;
+							}
+							if (msg.deltaThinking) {
+								stream.push({
+									type: "thinking_delta",
+									contentIndex: blockIndices.get(block)!,
+									delta: msg.deltaThinking,
+									partial: output,
+								});
+							}
 						}
 
 						if (msg.deltaText) {
