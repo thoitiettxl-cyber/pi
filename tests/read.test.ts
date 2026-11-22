@@ -23,7 +23,7 @@ test("read respects disabled private-network environment values and explicit opt
 	const binary = join(dir, "obscura");
 	writeFileSync(binary, '#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)));\n', { mode: 0o700 });
 	try {
-		for (const value of ["0", "false", "no", "off", "FALSE", undefined, "1"]) {
+		for (const value of ["", "0", "false", "no", "off", "FALSE", undefined, "1"]) {
 			for (const explicit of [false, true]) {
 				const env = { ...process.env, OBSCURA_BIN: binary };
 				delete env.OBSCURA_ALLOW_PRIVATE_NETWORK;
