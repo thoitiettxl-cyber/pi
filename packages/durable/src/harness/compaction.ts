@@ -91,7 +91,7 @@ Use this EXACT format:
 
 ## Progress
 ### Done
-- [x] [Completed tasks/changes]
+- [x] [Completed tasks/changes: what changed, files, commands run and their results]
 
 ### In Progress
 - [ ] [Current work]
@@ -109,7 +109,7 @@ Use this EXACT format:
 - [Any data, examples, or references needed to continue]
 - [Or "(none)" if not applicable]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+Keep each section concise. Preserve exact file paths, function names, and error messages. In Progress and Next Steps must contain only work not yet completed in the conversation; never list completed work there.`;
 
 /**
  * Built-in compaction task (spec §8.7): select an old prefix of the model context, summarize it, and place a summary
