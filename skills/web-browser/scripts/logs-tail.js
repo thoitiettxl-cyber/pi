@@ -66,7 +66,16 @@ function printUsage() {
 const HOOK_SOURCE = `(function () {
   if (window.__agentLogs && window.__agentLogs.version === ${HOOK_VERSION}) return;
 
-  var buffer = { version: ${HOOK_VERSION}, generation: Date.now().toString(36) + Math.random().toString(36), entries: [], nextSeq: 1, dropped: 0, max: ${MAX_ENTRIES} };
+  var generation = Date.now().toString(36) + Math.random().toString(36);
+  var buffer = window.__agentLogs;
+  if (buffer && buffer.version === 4) {
+    // Keep the buffer captured by the existing console and error handlers.
+    buffer.version = ${HOOK_VERSION};
+    buffer.generation = generation;
+    return;
+  }
+
+  buffer = { version: ${HOOK_VERSION}, generation: generation, entries: [], nextSeq: 1, dropped: 0, max: ${MAX_ENTRIES} };
   window.__agentLogs = buffer;
 
   var serialize = function (value) {
