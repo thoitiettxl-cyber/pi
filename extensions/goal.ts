@@ -801,6 +801,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 				);
 			}
 			setGoal(params.objective, params.token_budget);
+			activeGoalIdAtAgentStart = goal!.id;
 			persist("set");
 			updateStatus(ctx);
 			const response = goalResponse(currentGoalSnapshot(), ctx.sessionManager.getSessionId());
