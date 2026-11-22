@@ -32,6 +32,17 @@ test("logs paging resumes after the last printed sequence and survives ring-buff
 	assert.ok(wrapped.some((line) => line.startsWith("[log] 2005 ")), wrapped.join("\n"));
 });
 
+test("logs --since beyond the current sequence skips existing entries without resetting", async () => {
+	const store = { version: 5, generation: "same", nextSeq: 3, dropped: 0, entries: [{ seq: 1, level: "log", message: "skip me" }, { seq: 2, level: "log", message: "skip me too" }] };
+	const page = vm.createContext({ window: { __agentLogs: store } });
+	const output = await runScript("logs-tail", ["--since=100"], {
+		ensureBroker: async () => {}, cdpCall: async () => {}, brokerRequest: async () => ({ events: [] }),
+		evaluate: async (code: string) => vm.runInContext(code, page),
+	});
+	assert.ok(output.includes("entries printed: 0; next --since=100"), output.join("\n"));
+	assert.equal(output.filter((line) => line.startsWith("[log]")).length, 0);
+});
+
 test("logs follow restarts its cursor when the page buffer resets", async () => {
 	const store = { version: 5, generation: "old", nextSeq: 101, dropped: 0, entries: [{ seq: 100, level: "log", message: "old page" }] };
 	const page = vm.createContext({ window: { __agentLogs: store } });
