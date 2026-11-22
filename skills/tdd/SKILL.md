@@ -6,7 +6,7 @@ version: "1"
 
 # Test-Driven Development
 
-Adapted from mattpocock/skills `skills/engineering/tdd` (upstream commit abeeaf9, 2026-11-19). Upstream calls `codebase-design` and `code-review` skills that this setup does not have; their roles map to the seam vocabulary below and to subagent-orchestration Phase 3.
+Adapted from mattpocock/skills `skills/engineering/tdd` (upstream commit abeeaf9, 2026-11-19). Seam vocabulary comes from `/skill:codebase-design`; upstream's `code-review` skill maps to subagent-orchestration Phase 3.
 
 TDD is the red → green loop. This skill says what a test worth keeping looks like, where tests go, the anti-patterns, and the rules of the loop. Every section applies on every cycle.
 
@@ -26,10 +26,11 @@ Examples: [references/tests.md](references/tests.md). Mocking: [references/mocki
 
 A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals.
 
-- **Seams are settled before any test is written.** Propose the seams under test, each with one line on what it **catches** and what it **misses**, and get approval (the user, or the Boss/parent when running as a subagent). No test at an unapproved seam.
+- **Seams are settled before any test is written.** Propose the seams under test, each with one line on what it **catches** and what it **misses**, and get approval (the user, or the Boss/parent when running as a subagent). The proposal ends your turn: write no test or source file until the seams are approved, even in print mode (`pi -p`).
 - As a subagent, the seams come from the brief. If the brief has none, stop and report instead of choosing them yourself.
 - What a seam misses is tagged `[NEEDS-MEASUREMENT]` in the report; it is covered by the live test or review, not silently assumed.
-- If the interface shape itself is in question (how deep the module is, where the seam belongs, what it should expose), raise it as a finding before writing tests; do not redesign the module inside the loop.
+- Name seams with the `/skill:codebase-design` vocabulary (module, interface, seam, adapter, depth). Read it before proposing seams when the interface is not obvious; it is a reference to consult, not a session to run.
+- If the interface shape itself is in question (how deep the module is, where the seam belongs, what it should expose), settle it in the seam proposal before writing tests; do not redesign the module inside the loop.
 
 ## Anti-patterns
 
