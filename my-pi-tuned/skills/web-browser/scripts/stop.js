@@ -19,6 +19,7 @@ import {
   getPort,
   isProcessAlive,
   readState,
+  writeState,
 } from "./obscura.js";
 
 const args = process.argv.slice(2);
@@ -172,8 +173,14 @@ if (!flags.has("--keep-server")) {
   }
 }
 
-clearState();
-console.log("✓ State cleared; the persisted profile is preserved");
+if (flags.has("--keep-server") && state) {
+  const { brokerPid, brokerStartedAt, ...serverState } = state;
+  writeState(serverState);
+  console.log("✓ Broker state cleared; server state and persisted profile are preserved");
+} else {
+  clearState();
+  console.log("✓ State cleared; the persisted profile is preserved");
+}
 
 // execFileSync leaves a Socket handle open, which keeps the event loop alive and
 // makes stop.js appear to hang after it has already finished. Nothing else is

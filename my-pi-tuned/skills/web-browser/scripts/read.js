@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConnectionInfo, resolveObscuraBinary, stealthEnabled } from "./obscura.js";
+import { allowPrivateNetwork, getConnectionInfo, resolveObscuraBinary, stealthEnabled } from "./obscura.js";
 import { parseFlags } from "./cli.js";
 
 const DEBUG = process.env.DEBUG === "1";
@@ -93,7 +93,7 @@ if (waitUntil) args.push("--wait-until", String(waitUntil));
 
 if (stealthEnabled() && !has("--no-stealth")) args.push("--stealth");
 const { token } = getConnectionInfo();
-if (process.env.OBSCURA_ALLOW_PRIVATE_NETWORK || has("--allow-private-network")) {
+if (allowPrivateNetwork() || has("--allow-private-network")) {
   args.push("--allow-private-network");
 }
 if (process.env.OBSCURA_PROXY) args.push("--proxy", process.env.OBSCURA_PROXY);
@@ -154,7 +154,7 @@ child.on("close", (code) => {
   // `fetch` writes a "Page loaded: <url> - <title>" banner to stderr.
   const banner = stderr.split("\n").find((l) => l.startsWith("Page loaded:"));
   if (has("--raw") || dumpFlag === "original") {
-    process.stdout.write(stdout);
+    process.stdout.write(dumpFlag === "original" ? Buffer.concat(stdoutChunks) : stdout);
     return;
   }
 
