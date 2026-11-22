@@ -1,0 +1,25 @@
+{
+	"name": "pi-provider-devin",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Devin Cascade provider for pi",
+	"keywords": [
+		"pi-package"
+	],
+	"license": "MIT",
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"pi": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"scripts": {
+		"check": "tsc --noEmit"
+	}
+}

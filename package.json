@@ -1,0 +1,19 @@
+{
+  "name": "pi-packages",
+  "version": "0.1.0",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": [
+      "./provider-devin/src/index.ts",
+      "./my-pi-tuned/extensions/*.ts"
+    ],
+    "skills": ["./my-pi-tuned/skills"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": ">=1.6.0",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}
