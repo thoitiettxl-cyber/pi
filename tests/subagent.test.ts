@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import extension from "../extensions/subagent.ts";
 
 import {
 	assertCeiling,
@@ -32,6 +34,35 @@ const phase = (overrides: Partial<Phase0Input> = {}): Phase0Input => ({
 	target: "9",
 	outputPath: "research.md",
 	...overrides,
+});
+
+test("a vanished tmux session fails instead of polling forever", async () => {
+	const root = await mkdtemp(path.join(tmpdir(), "subagent-dead-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	await writeFile(path.join(root, "subagent-models.json"), "{}");
+	let tool!: { execute: (id: string, params: { task: string }, signal: AbortSignal, update: undefined, ctx: ExtensionContext) => Promise<unknown> };
+	const calls: string[][] = [];
+	try {
+		extension({
+			registerFlag() {}, on() {}, getThinkingLevel: () => "off",
+			registerTool(value: typeof tool) { tool = value; },
+			async exec(_command: string, args: string[]) {
+				calls.push(args);
+				const missing = args.some((arg) => ["capture-pane", "display-message", "has-session"].includes(arg));
+				return { code: missing ? 1 : 0, stdout: "", stderr: missing ? "can't find session" : "" };
+			},
+		} as unknown as ExtensionAPI);
+		const ctx = {
+			cwd: root, model: { provider: "test", id: "test" }, isProjectTrusted: () => true,
+			sessionManager: { getSessionId: () => "parent" },
+		} as unknown as ExtensionContext;
+		await assert.rejects(tool.execute("test", { task: "test" }, AbortSignal.timeout(1500), undefined, ctx), /tmux.*unavailable|can't find session/i);
+		assert.ok(calls.some((args) => args.includes("kill-session")));
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+	}
 });
 
 test("general task-only input is accepted", () => {
