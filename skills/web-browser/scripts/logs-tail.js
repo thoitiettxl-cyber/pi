@@ -43,7 +43,7 @@ function printUsage() {
   console.log("\nOptions:");
   console.log("  --follow        Keep polling until the limit, --for, or Ctrl-C.");
   console.log("  --limit=<n>     Print at most n entries this run (default 200).");
-  console.log("  --since=<i>     Start at entry index i (0-based; printed on each run).");
+  console.log("  --since=<i>     Read after sequence i (printed on each run; default 0).");
   console.log("  --clear         Empty the in-page buffer first.");
   console.log("  --poll=<ms>     Poll interval while following (default 200).");
   console.log("  --for=<sec>     Stop following after this many seconds.");
@@ -198,7 +198,7 @@ const READ = `(() => {
     nextSeq: store.nextSeq,
     dropped: store.dropped,
     total: store.entries.length,
-    entries: store.entries.slice(SINCE),
+    entries: store.entries.filter((entry) => entry.seq > SINCE),
   };
 })()`;
 
@@ -306,8 +306,8 @@ async function drain({ json }) {
     if (json) console.log(JSON.stringify(entry));
     else console.log(formatEntry(entry));
     printed += 1;
+    cursor = entry.seq;
   }
-  cursor = payload.nextSeq - 1;
   if (payload.dropped > 0 && entries.length === 0) {
     log(`page dropped ${payload.dropped} old entries (buffer cap ${MAX_ENTRIES})`);
   }
