@@ -374,7 +374,6 @@ function goalStopStatusForAssistantError(message: { errorMessage?: string } | un
 export default function goalExtension(pi: ExtensionAPI) {
 	let goal: Goal | null = null;
 	let activeSinceMs: number | null = null;
-	let activeGoalIdAtAgentStart: string | null = null;
 	let continuationQueued = false;
 
 	function currentGoalSnapshot(): Goal | null {
@@ -510,7 +509,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 		if (goal.status === "active") accountElapsed();
 		goal = null;
 		activeSinceMs = null;
-		activeGoalIdAtAgentStart = null;
 		continuationQueued = false;
 		return true;
 	}
@@ -553,7 +551,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 	function reconstructState(ctx: ExtensionContext): void {
 		goal = null;
 		activeSinceMs = null;
-		activeGoalIdAtAgentStart = null;
 		continuationQueued = false;
 
 		for (const entry of ctx.sessionManager.getBranch()) {
@@ -580,20 +577,21 @@ export default function goalExtension(pi: ExtensionAPI) {
 
 	pi.on("agent_start", async (_event, _ctx) => {
 		continuationQueued = false;
-		activeGoalIdAtAgentStart = goal?.status === "active" ? goal.id : null;
+	});
+
+	pi.on("message_end", async (event, ctx) => {
+		if (!goal || goal.status !== "active") return;
+		const tokens = assistantUsageTokens([event.message]);
+		if (tokens <= 0) return;
+		goal.tokensUsed += tokens;
+		goal.updatedAt = nowSeconds();
+		persist("account");
+		updateStatus(ctx);
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
 		if (!goal) return;
 		let changed = false;
-		if (activeGoalIdAtAgentStart === goal.id) {
-			const tokens = assistantUsageTokens(event.messages as unknown[]);
-			if (tokens > 0) {
-				goal.tokensUsed += tokens;
-				goal.updatedAt = nowSeconds();
-				changed = true;
-			}
-		}
 		if (goal.status === "active" && accountElapsed()) {
 			changed = true;
 		}
@@ -603,7 +601,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 		}
 		if (changed) persist("account");
 		updateStatus(ctx);
-		activeGoalIdAtAgentStart = null;
 
 		if (goal.status !== "active") return;
 
@@ -801,7 +798,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 				);
 			}
 			setGoal(params.objective, params.token_budget);
-			activeGoalIdAtAgentStart = goal!.id;
 			persist("set");
 			updateStatus(ctx);
 			const response = goalResponse(currentGoalSnapshot(), ctx.sessionManager.getSessionId());
