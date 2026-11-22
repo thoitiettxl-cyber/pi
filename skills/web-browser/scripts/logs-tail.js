@@ -303,7 +303,7 @@ async function drain({ json }) {
     }
     return;
   }
-  if ((cursorGeneration !== undefined && cursorGeneration !== payload.generation) || payload.nextSeq - 1 < cursor) {
+  if (cursorGeneration !== undefined && cursorGeneration !== payload.generation) {
     cursor = 0;
     payload = await evaluate(READ.replace("SINCE", "0"), { tabId, timeout: 20000 });
     if (!payload) return;
