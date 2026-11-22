@@ -378,7 +378,7 @@ try {
     await ensureCurrentDocumentHook();
     // Reset the sequence too, so `--since` indexes restart at 0 after a clear.
     await evaluate(
-      "((s) => { s.entries.length = 0; s.dropped = 0; s.nextSeq = 1; return true; })(window.__agentLogs)",
+      "((s) => { s.entries.length = 0; s.dropped = 0; s.nextSeq = 1; s.generation = Date.now().toString(36) + Math.random().toString(36); return true; })(window.__agentLogs)",
       { tabId, timeout: 10000 },
     );
     cursor = 0;

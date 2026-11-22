@@ -88,6 +88,25 @@ test("logs follow restarts its cursor when the page buffer resets", async () => 
 	assert.ok(output.some((line) => line.startsWith("[log] new page")), output.join("\n"));
 });
 
+test("logs --clear changes generation so an existing follower reads restarted sequences", async () => {
+	const store = { version: 5, generation: "original", nextSeq: 101, dropped: 0, entries: [{ seq: 100, level: "log", message: "old page" }] };
+	const page = vm.createContext({ window: { __agentLogs: store } });
+	const mocks = { ensureBroker: async () => {}, cdpCall: async () => {}, brokerRequest: async () => ({ events: [] }), evaluate: async (code: string) => vm.runInContext(code, page) };
+	let reads = 0;
+	const output = await runScript("logs-tail", ["--follow", "--for=0.05", "--poll", "20", "--limit=2"], {
+		...mocks,
+		evaluate: async (code: string) => {
+			if (code.includes("const store") && ++reads === 2) {
+				await runScript("logs-tail", ["--clear"], mocks);
+				store.entries.push({ seq: store.nextSeq++, level: "log", message: "after clear" });
+			}
+			return vm.runInContext(code, page);
+		},
+	});
+	assert.ok(output.some((line) => line.startsWith("[log] after clear")), output.join("\n"));
+	assert.notEqual(store.generation, "original");
+});
+
 test("logs follow stops immediately when the last buffered record reaches the limit", async () => {
 	for (const limit of [0, 1]) {
 		const store = { version: 5, nextSeq: limit + 1, dropped: 0, entries: limit ? [{ seq: 1, level: "log", message: "only record" }] : [] };
