@@ -137,12 +137,18 @@ child.on("close", (code) => {
   clearTimeout(hardTimeout);
   // "close" can follow a spawn "error"; the error path already reported it.
   if (spawnError) return;
-  const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+  const stdoutBuffer = Buffer.concat(stdoutChunks);
   const stderr = Buffer.concat(stderrChunks).toString("utf8");
   const elapsed = Date.now() - started;
 
   rmSync(outDir, { recursive: true, force: true });
 
+  if (code === 0 && dumpFlag === "original") {
+    process.stdout.write(stdoutBuffer);
+    return;
+  }
+
+  const stdout = stdoutBuffer.toString("utf8");
   if (code !== 0) {
     // Obscura prints failures on stderr; surface them without the banner noise.
     const message = (stderr || stdout).split("\n").filter(Boolean).slice(-3).join("\n");
@@ -153,8 +159,8 @@ child.on("close", (code) => {
 
   // `fetch` writes a "Page loaded: <url> - <title>" banner to stderr.
   const banner = stderr.split("\n").find((l) => l.startsWith("Page loaded:"));
-  if (has("--raw") || dumpFlag === "original") {
-    process.stdout.write(dumpFlag === "original" ? Buffer.concat(stdoutChunks) : stdout);
+  if (has("--raw")) {
+    process.stdout.write(stdout);
     return;
   }
 
