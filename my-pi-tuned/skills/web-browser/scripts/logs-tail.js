@@ -33,7 +33,7 @@ const DEBUG = process.env.DEBUG === "1";
 const log = DEBUG ? (...args) => console.error("[debug]", ...args) : () => {};
 
 // Bumped when the hook's shape changes: an older in-page hook is replaced.
-const HOOK_VERSION = 4;
+const HOOK_VERSION = 5;
 const MAX_ENTRIES = 2000; // ring buffer cap; keeps each poll well under 1 MB
 const DEFAULT_POLL_MS = 200;
 
@@ -66,7 +66,7 @@ function printUsage() {
 const HOOK_SOURCE = `(function () {
   if (window.__agentLogs && window.__agentLogs.version === ${HOOK_VERSION}) return;
 
-  var buffer = { version: ${HOOK_VERSION}, entries: [], nextSeq: 1, dropped: 0, max: ${MAX_ENTRIES} };
+  var buffer = { version: ${HOOK_VERSION}, generation: Date.now().toString(36) + Math.random().toString(36), entries: [], nextSeq: 1, dropped: 0, max: ${MAX_ENTRIES} };
   window.__agentLogs = buffer;
 
   var serialize = function (value) {
@@ -195,6 +195,7 @@ const READ = `(() => {
   if (!store || !Array.isArray(store.entries)) return null;
   return {
     version: store.version || 0,
+    generation: store.generation,
     nextSeq: store.nextSeq,
     dropped: store.dropped,
     total: store.entries.length,
@@ -286,17 +287,28 @@ async function ensureCurrentDocumentHook() {
 
 let printed = 0;
 let cursor = since;
+let cursorGeneration;
 // Separate cursor for the broker's CDP event buffer (uncaught exceptions).
 let exceptionCursor = 0;
 let stopped = false;
 
 async function drain({ json }) {
-  const payload = await evaluate(READ.replace("SINCE", String(cursor)), { tabId, timeout: 20000 });
+  let payload = await evaluate(READ.replace("SINCE", String(cursor)), { tabId, timeout: 20000 });
   if (!payload) {
     const installed = await ensureCurrentDocumentHook();
-    if (installed) console.error("! hook was missing in this document; installed now (earlier logs are lost)");
+    if (installed) {
+      cursor = 0;
+      cursorGeneration = undefined;
+      console.error("! hook was missing in this document; installed now (earlier logs are lost)");
+    }
     return;
   }
+  if ((cursorGeneration !== undefined && cursorGeneration !== payload.generation) || payload.nextSeq - 1 < cursor) {
+    cursor = 0;
+    payload = await evaluate(READ.replace("SINCE", "0"), { tabId, timeout: 20000 });
+    if (!payload) return;
+  }
+  cursorGeneration = payload.generation;
   const entries = payload.entries || [];
   for (const entry of entries) {
     if (printed >= limit) {
