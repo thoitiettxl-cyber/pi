@@ -31,3 +31,15 @@ test("logs paging resumes after the last printed sequence and survives ring-buff
 	const wrapped = await runScript("logs-tail", ["--limit=2", "--since=2004"], mocks);
 	assert.ok(wrapped.some((line) => line.startsWith("[log] 2005 ")), wrapped.join("\n"));
 });
+
+test("eval --json awaits promises and await expressions, preserving BigInts", async () => {
+	for (const code of ["Promise.resolve({answer:42})", "await Promise.resolve({answer:42})", "({answer:42})", "Promise.resolve({answer:42n})", "Promise.resolve(null)"]) {
+		const output = await runScript("eval", [code, "--json"], {
+			ensureBroker: async () => {}, applyActiveEmulation: async () => {}, sessionAdapter: () => ({}),
+			evaluate: async (expression: string) => vm.runInNewContext(expression),
+			cdpCall: async () => { throw new Error("Unexpected statement fallback"); },
+		});
+		const expected = code.includes("null") ? null : { answer: code.includes("42n") ? "42" : 42 };
+		assert.deepEqual(JSON.parse(output.join("\n")), expected, code);
+	}
+});

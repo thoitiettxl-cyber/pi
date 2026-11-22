@@ -87,8 +87,8 @@ try {
   // Obscura's returnByValue flattens an array/object containing a BigInt into a
   // string ("10,1" for [10n,1]). For --json, serialise inside the page instead,
   // where a proper replacer can preserve BigInt as a JSON string.
-  const jsonExpression = `(() => {
-    const v = (${code});
+  const jsonExpression = `(async () => {
+    const v = await (${code});
     return JSON.stringify(v, (k, x) => typeof x === "bigint" ? x.toString() : x, 2) ?? "null";
   })()`;
 
