@@ -23,3 +23,8 @@ control (`--session-control`, `list_sessions`), goal, todos, unified-edit, uv, s
 ## Not verified
 - aarch64/Android: tested on x86_64 only. Obscura publishes `aarch64-linux` assets.
 - Exa/Firecrawl/Context7 routes (MCP servers not in this archive).
+
+## Added: `tdd` skill
+- `skills/tdd/` re-synced from mattpocock/skills `skills/engineering/tdd` (upstream commit abeeaf9, 2026-11-19), so subagent-orchestration Phase 2 (`/skill:tdd`) resolves to a real skill.
+- Normalized to this setup: seams approved by the user or Boss/parent (a subagent takes them from the brief), misses tagged `[NEEDS-MEASUREMENT]`, no refactoring in the loop (goes to Phase 3 review), test files listed in `allowFiles`, live test gate still required. Upstream calls to the missing `codebase-design`/`code-review` skills and the Codex `agents/openai.yaml` were dropped. `tests.md`/`mocking.md` kept verbatim under `references/`.
+- Tested: `pi -p "/skill:tdd ..."` with the Devin provider loads the skill and answers from it.

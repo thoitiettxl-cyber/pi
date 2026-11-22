@@ -53,7 +53,7 @@ Constraints: <rules + prohibitions> | Output: <format + path> | Non-goals: <expl
 
 Avoid conflicts when editing the same file. Add Outcome + Metric at the top of the brief. Implement only finished research (DRAFT → skip, record the reason). Not committed yet — parent decides after review. Non-goals: commit, push, PR, build.
 
-- TDD (only when the task has testable code logic; log-only/config changes are skipped): Details (seam, mocking, anti-patterns, examples): read skill `tdd`.
+- TDD (only when the task has testable code logic; log-only/config changes are skipped): Details (seam, mocking, anti-patterns, examples): `/skill:tdd`.
   - Seam: settled in advance, Boss approves; for each seam record "catches / misses".
   - Each round: 1 seam → 1 red test → minimal code → green.
   - Expected = literal/worked example with a solution/spec; forbidden to recompute it using the code's logic.
