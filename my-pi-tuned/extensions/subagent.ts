@@ -1307,6 +1307,9 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 						}
 
 						const dead = await pi.exec("tmux", tmuxArgs("display-message", "-p", "-t", tmuxTarget, "#{pane_dead}"));
+						if (dead.code !== 0) {
+							throw new Error(`Child tmux session unavailable: ${dead.stderr.trim() || dead.stdout.trim() || tmuxTarget}`);
+						}
 						if (dead.code === 0 && dead.stdout.trim() === "1") {
 							let reported = false;
 							for (let attempt = 0; attempt < PANE_DEAD_POLLS; attempt++) {

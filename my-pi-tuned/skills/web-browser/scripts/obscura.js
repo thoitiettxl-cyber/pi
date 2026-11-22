@@ -94,7 +94,7 @@ export function stealthEnabled() {
 
 export function allowPrivateNetwork() {
   const value = process.env.OBSCURA_ALLOW_PRIVATE_NETWORK;
-  return value !== undefined && !/^(0|false|no|off)$/i.test(value);
+  return value !== undefined && value !== "" && !/^(0|false|no|off)$/i.test(value);
 }
 
 /** Global flags shared by fetch/scrape/serve/mcp. */

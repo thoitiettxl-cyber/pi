@@ -12,7 +12,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConnectionInfo, resolveObscuraBinary, stealthEnabled } from "./obscura.js";
+import { allowPrivateNetwork, getConnectionInfo, resolveObscuraBinary, stealthEnabled } from "./obscura.js";
 import { parseFlags } from "./cli.js";
 
 const DEBUG = process.env.DEBUG === "1";
@@ -93,7 +93,7 @@ if (waitUntil) args.push("--wait-until", String(waitUntil));
 
 if (stealthEnabled() && !has("--no-stealth")) args.push("--stealth");
 const { token } = getConnectionInfo();
-if (process.env.OBSCURA_ALLOW_PRIVATE_NETWORK || has("--allow-private-network")) {
+if (allowPrivateNetwork() || has("--allow-private-network")) {
   args.push("--allow-private-network");
 }
 if (process.env.OBSCURA_PROXY) args.push("--proxy", process.env.OBSCURA_PROXY);
@@ -137,12 +137,18 @@ child.on("close", (code) => {
   clearTimeout(hardTimeout);
   // "close" can follow a spawn "error"; the error path already reported it.
   if (spawnError) return;
-  const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+  const stdoutBuffer = Buffer.concat(stdoutChunks);
   const stderr = Buffer.concat(stderrChunks).toString("utf8");
   const elapsed = Date.now() - started;
 
   rmSync(outDir, { recursive: true, force: true });
 
+  if (code === 0 && dumpFlag === "original") {
+    process.stdout.write(stdoutBuffer);
+    return;
+  }
+
+  const stdout = stdoutBuffer.toString("utf8");
   if (code !== 0) {
     // Obscura prints failures on stderr; surface them without the banner noise.
     const message = (stderr || stdout).split("\n").filter(Boolean).slice(-3).join("\n");
@@ -153,7 +159,7 @@ child.on("close", (code) => {
 
   // `fetch` writes a "Page loaded: <url> - <title>" banner to stderr.
   const banner = stderr.split("\n").find((l) => l.startsWith("Page loaded:"));
-  if (has("--raw") || dumpFlag === "original") {
+  if (has("--raw")) {
     process.stdout.write(stdout);
     return;
   }

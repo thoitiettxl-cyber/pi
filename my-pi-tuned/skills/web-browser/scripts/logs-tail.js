@@ -33,7 +33,7 @@ const DEBUG = process.env.DEBUG === "1";
 const log = DEBUG ? (...args) => console.error("[debug]", ...args) : () => {};
 
 // Bumped when the hook's shape changes: an older in-page hook is replaced.
-const HOOK_VERSION = 4;
+const HOOK_VERSION = 5;
 const MAX_ENTRIES = 2000; // ring buffer cap; keeps each poll well under 1 MB
 const DEFAULT_POLL_MS = 200;
 
@@ -43,7 +43,7 @@ function printUsage() {
   console.log("\nOptions:");
   console.log("  --follow        Keep polling until the limit, --for, or Ctrl-C.");
   console.log("  --limit=<n>     Print at most n entries this run (default 200).");
-  console.log("  --since=<i>     Start at entry index i (0-based; printed on each run).");
+  console.log("  --since=<i>     Read after sequence i (printed on each run; default 0).");
   console.log("  --clear         Empty the in-page buffer first.");
   console.log("  --poll=<ms>     Poll interval while following (default 200).");
   console.log("  --for=<sec>     Stop following after this many seconds.");
@@ -66,7 +66,16 @@ function printUsage() {
 const HOOK_SOURCE = `(function () {
   if (window.__agentLogs && window.__agentLogs.version === ${HOOK_VERSION}) return;
 
-  var buffer = { version: ${HOOK_VERSION}, entries: [], nextSeq: 1, dropped: 0, max: ${MAX_ENTRIES} };
+  var generation = Date.now().toString(36) + Math.random().toString(36);
+  var buffer = window.__agentLogs;
+  if (buffer && buffer.version === 4) {
+    // Keep the buffer captured by the existing console and error handlers.
+    buffer.version = ${HOOK_VERSION};
+    buffer.generation = generation;
+    return;
+  }
+
+  buffer = { version: ${HOOK_VERSION}, generation: generation, entries: [], nextSeq: 1, dropped: 0, max: ${MAX_ENTRIES} };
   window.__agentLogs = buffer;
 
   var serialize = function (value) {
@@ -195,10 +204,11 @@ const READ = `(() => {
   if (!store || !Array.isArray(store.entries)) return null;
   return {
     version: store.version || 0,
+    generation: store.generation,
     nextSeq: store.nextSeq,
     dropped: store.dropped,
     total: store.entries.length,
-    entries: store.entries.slice(SINCE),
+    entries: store.entries.filter((entry) => entry.seq > SINCE),
   };
 })()`;
 
@@ -286,17 +296,28 @@ async function ensureCurrentDocumentHook() {
 
 let printed = 0;
 let cursor = since;
+let cursorGeneration;
 // Separate cursor for the broker's CDP event buffer (uncaught exceptions).
 let exceptionCursor = 0;
 let stopped = false;
 
 async function drain({ json }) {
-  const payload = await evaluate(READ.replace("SINCE", String(cursor)), { tabId, timeout: 20000 });
+  let payload = await evaluate(READ.replace("SINCE", String(cursor)), { tabId, timeout: 20000 });
   if (!payload) {
     const installed = await ensureCurrentDocumentHook();
-    if (installed) console.error("! hook was missing in this document; installed now (earlier logs are lost)");
+    if (installed) {
+      cursor = 0;
+      cursorGeneration = undefined;
+      console.error("! hook was missing in this document; installed now (earlier logs are lost)");
+    }
     return;
   }
+  if (cursorGeneration !== undefined && cursorGeneration !== payload.generation) {
+    cursor = 0;
+    payload = await evaluate(READ.replace("SINCE", "0"), { tabId, timeout: 20000 });
+    if (!payload) return;
+  }
+  cursorGeneration = payload.generation;
   const entries = payload.entries || [];
   for (const entry of entries) {
     if (printed >= limit) {
@@ -306,8 +327,9 @@ async function drain({ json }) {
     if (json) console.log(JSON.stringify(entry));
     else console.log(formatEntry(entry));
     printed += 1;
+    cursor = entry.seq;
   }
-  cursor = payload.nextSeq - 1;
+  if (printed >= limit) stopped = true;
   if (payload.dropped > 0 && entries.length === 0) {
     log(`page dropped ${payload.dropped} old entries (buffer cap ${MAX_ENTRIES})`);
   }
@@ -356,7 +378,7 @@ try {
     await ensureCurrentDocumentHook();
     // Reset the sequence too, so `--since` indexes restart at 0 after a clear.
     await evaluate(
-      "((s) => { s.entries.length = 0; s.dropped = 0; s.nextSeq = 1; return true; })(window.__agentLogs)",
+      "((s) => { s.entries.length = 0; s.dropped = 0; s.nextSeq = 1; s.generation = Date.now().toString(36) + Math.random().toString(36); return true; })(window.__agentLogs)",
       { tabId, timeout: 10000 },
     );
     cursor = 0;

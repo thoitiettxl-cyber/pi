@@ -604,7 +604,7 @@ function parseRowScript(text: string): RawFileScript[] {
 		const raw = lines[i];
 		const lineNumber = i + 1;
 		const trimmed = raw.trim();
-		if (trimmed === "") continue;
+		if (trimmed === "" && !(raw.startsWith(" ") && currentOp?.kind === "replace")) continue;
 
 		const fileMatch = /^\[(.+)]\s*$/.exec(trimmed);
 		if (fileMatch) {
