@@ -14,13 +14,15 @@ import {
 	editAllowed,
 	modelCandidates,
 	parseModelRef,
+	defaultModelFile,
 	parseModelConfig,
+	registersProvider,
 	resolveOutputRelative,
 	shouldSkipDraft,
 	shouldTryNextModel,
 	type FlightView,
 	type Phase0Input,
-} from "./subagent-policy.ts";
+} from "../extensions/subagent.ts";
 
 const phase = (overrides: Partial<Phase0Input> = {}): Phase0Input => ({
 	role: "research",
@@ -152,7 +154,7 @@ test("symlink output parent is rejected without creating the outside directory",
 	const root = await mkdtemp(path.join(tmpdir(), "subagent-out-"));
 	const outside = await mkdtemp(path.join(tmpdir(), "subagent-esc-"));
 	await symlink(outside, path.join(root, "link"));
-	const { resolveOutputFile } = await import("./subagent-policy.ts");
+	const { resolveOutputFile } = await import("../extensions/subagent.ts");
 	await assert.rejects(() => resolveOutputFile(root, "link/new-dir/escaped.md"), /escapes/);
 	await assert.rejects(stat(path.join(outside, "new-dir")));
 });
@@ -161,7 +163,7 @@ test("new file under an allowlisted missing path is not allowed until the parent
 	const root = await mkdtemp(path.join(tmpdir(), "subagent-allow-"));
 	const file = path.join(root, "keep.ts");
 	await writeFile(file, "x");
-	const { canonicalEditPath } = await import("./subagent-policy.ts");
+	const { canonicalEditPath } = await import("../extensions/subagent.ts");
 	const canonical = await canonicalEditPath(file, root);
 	assert.equal(editAllowed(canonical, [canonical]), true);
 	await mkdir(path.join(root, "sub"));
@@ -169,10 +171,10 @@ test("new file under an allowlisted missing path is not allowed until the parent
 	assert.equal(editAllowed(created, [canonical]), false);
 });
 
-test("parseModelConfig accepts lists, strings, objects and extensions and rejects bad entries", () => {
+test("parseModelConfig accepts lists, strings, objects and a fallback list and rejects bad entries", () => {
 	assert.deepEqual(
 		parseModelConfig({
-			extensions: ["~/.pi/agent/git/github.com/thoitiettxl-cyber/pi/src/index.ts"],
+			fallback: ["devin/swe-1-6"],
 			research: ["devin/swe-1-6", "devin/adaptive"],
 			review: "devin/adaptive",
 			implement: { models: ["devin/fusion-x-high-sidekick-y"], thinking: "high" },
@@ -183,7 +185,7 @@ test("parseModelConfig accepts lists, strings, objects and extensions and reject
 				review: { models: [{ provider: "devin", model: "adaptive" }], thinking: undefined },
 				implement: { models: [{ provider: "devin", model: "fusion-x-high-sidekick-y" }], thinking: "high" },
 			},
-			extensions: ["~/.pi/agent/git/github.com/thoitiettxl-cyber/pi/src/index.ts"],
+			fallback: [{ provider: "devin", model: "swe-1-6" }],
 		},
 	);
 	assert.throws(() => parseModelConfig([]), /object keyed by role/);
@@ -191,7 +193,7 @@ test("parseModelConfig accepts lists, strings, objects and extensions and reject
 	assert.throws(() => parseModelConfig({ research: [] }), /non-empty list/);
 	assert.throws(() => parseModelConfig({ research: ["adaptive"] }), /provider\/model/);
 	assert.throws(() => parseModelConfig({ research: { models: ["devin/a"], thinking: "huge" } }), /thinking must be/);
-	assert.throws(() => parseModelConfig({ extensions: "a.ts" }), /extensions must be/);
+	assert.throws(() => parseModelConfig({ fallback: [] }), /fallback must be/);
 });
 
 test("modelCandidates: explicit wins alone, else role list then parent, deduplicated", () => {
@@ -206,6 +208,11 @@ test("modelCandidates: explicit wins alone, else role list then parent, deduplic
 	]);
 	assert.deepEqual(modelCandidates(undefined, undefined, parent), [{ ...parent, source: "parent" }]);
 	assert.deepEqual(modelCandidates(undefined, undefined, undefined), []);
+	assert.deepEqual(modelCandidates(undefined, roleConfig, parent, [{ provider: "openai", model: "gpt" }, parent]), [
+		{ provider: "devin", model: "swe-1-6", source: "role" },
+		{ provider: "devin", model: "adaptive", source: "role" },
+		{ provider: "openai", model: "gpt", source: "fallback" },
+	]);
 });
 
 test("parseModelRef splits provider/model and uses the fallback provider for bare ids", () => {
@@ -221,4 +228,21 @@ test("shouldTryNextModel only for auth, plan or model errors before any tool ran
 	assert.equal(shouldTryNextModel({ status: "failed", error: "401 Unauthorized", toolResults: 2 }), false);
 	assert.equal(shouldTryNextModel({ status: "failed", error: "Subagent session shut down before the task settled." }), false);
 	assert.equal(shouldTryNextModel({ status: "completed", error: "401" }), false);
+});
+
+test("defaultModelFile keeps only usable models: Devin router for readers, scoped models then Devin as fallback", () => {
+	const available = ["devin/adaptive", "devin/swe-1-6", "openai/gpt-5", "anthropic/claude"];
+	assert.deepEqual(defaultModelFile(available, ["openai/gpt-5:high", "anthropic/*", "google/gemini"]), {
+		research: ["devin/adaptive"],
+		review: ["devin/adaptive"],
+		fallback: ["openai/gpt-5", "devin/adaptive", "devin/swe-1-6"],
+	});
+	assert.deepEqual(defaultModelFile(["openai/gpt-5"], undefined), {});
+	assert.deepEqual(parseModelConfig(defaultModelFile(available, undefined)).fallback.length, 2);
+});
+
+test("registersProvider detects provider registration in extension source", () => {
+	assert.equal(registersProvider("pi.registerProvider(devinProvider());"), true);
+	assert.equal(registersProvider("pi.registerNativeProvider (p)"), true);
+	assert.equal(registersProvider("pi.registerTool({ name: 'x' })"), false);
 });
