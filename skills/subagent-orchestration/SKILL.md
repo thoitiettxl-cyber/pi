@@ -27,7 +27,7 @@ Phase 0: OUTCOME → Phase 1: RESEARCH (parallel) → Phase 2: IMPLEMENT (1 writ
 → Phase 3: REVIEW (parallel) → Live test → [repeat if metric < Floor]
 ```
 
-Syntax on Muse: `subagent.spawn {message: "<brief>"}` (async, result returns later; manage with `subagent.list/send/resume/close`).
+Syntax in Pi: the `subagent` tool runs one child Pi in tmux per call and returns its result. `role`: `general` (default, task only) or `implement` are exclusive; `research` and `review` are read-only and run up to 3 in parallel. `research`/`review`/`implement` require `outcome`, `metric`, `floor`, `target`; `research`/`review` also `outputPath`; `implement` also `allowFiles`; `review` also `artifactPath`. Optional: `ceiling`, `heldOut`, `researchStatus: "draft"`. Watch a child with `pi --attach-subagent <id>`.
 
 ## Phase 1: Research (parallel)
 

@@ -39,7 +39,7 @@ Write Markdown to a specific file:
 uvx --from 'markitdown[pdf]' markitdown <url-or-path> > /tmp/doc.md
 ```
 
-### Convert + summarize with haiku-4-5 (pass context!)
+### Convert + summarize (pass context!)
 
 Summaries are only useful when you provide **what you want extracted** and the **audience/purpose**.
 
@@ -56,4 +56,4 @@ node to-markdown.mjs <url-or-path> --summary --prompt "Focus on security implica
 This will:
 1) convert to Markdown via `uvx --from 'markitdown[pdf]' markitdown`
 2) write the full Markdown to a temp `.md` file and print its path as a "Hint" line
-3) run `pi --model claude-haiku-4-5` (no-tools, no-session) to summarize using your extra prompt
+3) run `pi --no-tools --no-session -p` with the current session model (`PI_PROVIDER` / `PI_MODEL`) to summarize using your extra prompt. Set `SUMMARIZE_PROVIDER` / `SUMMARIZE_MODEL` to use a cheaper model.

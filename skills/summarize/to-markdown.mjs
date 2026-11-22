@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Convert a URL or local file to Markdown using `uvx markitdown`.
- * Optionally summarize the produced Markdown via `pi` (claude-haiku-4-5).
+ * Optionally summarize the produced Markdown via `pi` with the current session model
+ * (PI_PROVIDER / PI_MODEL), or SUMMARIZE_PROVIDER / SUMMARIZE_MODEL when set.
  *
  * Note: `markitdown` can fetch URLs on its own; this script mainly adds:
  *   - optional writing to a temp file / specific output path
@@ -182,9 +183,11 @@ ${truncNote}
 ${body}
 --- END DOCUMENT ---`;
 
+  const provider = process.env.SUMMARIZE_PROVIDER || process.env.PI_PROVIDER;
+  const model = process.env.SUMMARIZE_MODEL || process.env.PI_MODEL;
   const result = spawnSync('pi', [
-    '--provider', 'anthropic',
-    '--model', 'claude-haiku-4-5',
+    ...(provider ? ['--provider', provider] : []),
+    ...(model ? ['--model', model] : []),
     '--no-tools',
     '--no-session',
     '-p',

@@ -62,3 +62,5 @@ Next action, in order:
 2. Firecrawl `firecrawl_search`
 
 Do **not** retry with another `--provider` or a mini/haiku model.
+
+If neither Exa nor Firecrawl tools exist in this session, say so, then read known origin pages with the web-browser skill (`read.js <url> --markdown`) or the summarize skill. Providers without native search include `devin`.

@@ -9,7 +9,7 @@ description: Challenge and improve the ambition, outcome framing, and feasibilit
 Turn a task-oriented request into a set of better-framed choices without confusing bigger scope with better outcomes. This is a **planning and reframing** skill, not an implementation skill.
 
 ## Invocation
-Use only when the user explicitly asks for this skill, e.g. `$ambition-amplifier`, or explicitly asks to amplify an existing prompt. When invoked without a quoted prompt, use the user's latest substantive request as the input. Do not automatically invoke for ordinary coding or debugging.
+Use only when the user explicitly asks for this skill, e.g. `/skill:ambition-amplifier`, or explicitly asks to amplify an existing prompt. When invoked without a quoted prompt, use the user's latest substantive request as the input. Do not automatically invoke for ordinary coding or debugging.
 
 ## Process
 1. **Extract the original intention.** In 1–2 sentences, identify the requested task, intended beneficiary, expected outcome, and known constraints. Distinguish facts from assumptions.

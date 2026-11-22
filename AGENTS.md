@@ -49,6 +49,7 @@ Timeless facts (language syntax, history) need no lookup. The rules below cover 
 - Every command that can hang gets a timeout (`timeout 20`, `curl -m`).
 - Outer `timeout` must be at least the inner wait plus 120 s. An outer timeout that fires first wastes the whole wait.
 - Never run a fixed `sleep` of 600 s or more in a bash call. A long wait goes in one background script that loops and logs; poll it.
+- Wait for an interactive program in tmux with the tmux skill's `wait-for-text.sh -S "$SOCKET"`, not a fixed sleep.
 
 ## Scoping (multi-part efforts only)
 Applies to comparison/parity, migration, integration, review of a progress report for remaining gaps, or a spec handed to another agent. Not for a single change, a plain explanation, or work that can be implemented directly.
@@ -62,6 +63,15 @@ Applies to comparison/parity, migration, integration, review of a progress repor
 - Resolve what the evidence settles; keep genuine open questions open. Specify implementation details only when they are established constraints or needed for interoperability, safety, or acceptance.
 - Before delivering, check: every gap has evidence or is marked unverified; deliberate differences are not labeled missing; priority reflects impact and dependency; high uncertainty is tested early while risky rollout stays gated; units are independently verifiable; every phase has acceptance evidence; "done" includes the authoritative verification.
 
+## Tools in this setup
+Use the installed skill or tool before writing a substitute.
+- Multi-step work (3+ steps): track it with the `todo` tool. Long autonomous objectives: `create_goal` / `update_goal`.
+- Delegation: the `subagent` tool; load the subagent-orchestration skill first. research/review are read-only (max 3 in parallel); implement is the single writer, limited to `allowFiles`.
+- Python: `uv` only. pip, poetry, `python -m pip|venv|py_compile` are blocked by the uv extension; use `uv run`, `uv add`, `uv run --with`.
+- Search and docs: load search-playbook first. Remote repo as reference: librarian (`~/.cache/checkouts`). Web page: web-browser `read.js` before a stateful session. Document to Markdown: summarize.
+- Unfamiliar or risky implementation: xia brief first. Priority vs order conflicts: sequence-execution-plan.
+- `commit` shorthand: follow the commit skill (Conventional Commits subject, no push).
+
 ## Code
 - Match the current project's indent, quotes, imports, and file layout. No global formatter.
 - Keep behavior next to where it is read. Split a unit only for reuse, an independent test, or size that no longer fits in mind.
@@ -70,7 +80,9 @@ Applies to comparison/parity, migration, integration, review of a progress repor
 - Precedence: the project's AGENTS.md overrides Chat and Code defaults here (e.g. comment language). Authority, Shorthand, and Host rules always apply.
 
 ## Host
-- Repos: /root/workspace. Scratch: /root/tmp and /tmp (delete task files when done).
+- Debian on Android, running as root. Repos: /root/workspace. Scratch: /root/tmp and /tmp (delete task files when done).
+- Check `uname -m` before downloading a prebuilt binary; pick the matching arch asset.
+- Battery and storage are limited: no idle background processes; stop servers, tmux sessions, and browsers you started when the task ends.
 - apt: do not install/remove/upgrade unless the task needs it. Never dist-upgrade or full-upgrade without an explicit request. Use `DEBIAN_FRONTEND=noninteractive apt-get`. No concurrent apt/dpkg.
 - Treat the device as IPv4-only unless runtime evidence shows IPv6.
 - Avoid broad writes, build trees, or permission changes on /storage/emulated/0.

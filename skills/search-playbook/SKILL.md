@@ -43,6 +43,8 @@ Firecrawl extras, when the query matches:
 - `categories: ["gov"]` or `firecrawl_gov_search` for US government and regulatory sources. Do not combine `gov` with other categories.
 - `firecrawl_research_search_papers` for paper abstracts and full text. This is separate from web results tagged `research`.
 
+Local fallback when Exa and Firecrawl are not installed: web-browser `read.js <url> --markdown` for a known URL, summarize for documents, `gh search` for code. State that web search was unavailable.
+
 There is no image-search, shopping, or social-search tool in this session. For those, use Exa or Firecrawl and say the specialized channel is absent. Do not invent prices, images, or public opinion.
 
 ## Long research
