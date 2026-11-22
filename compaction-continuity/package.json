@@ -1,0 +1,37 @@
+{
+	"name": "pi-compaction-continuity",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Compaction continuity with live goal and todo state for pi",
+	"keywords": [
+		"pi-package"
+	],
+	"license": "MIT",
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"pi": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": ">=1.6.0"
+	},
+	"scripts": {
+		"check": "tsc --noEmit",
+		"test": "vitest --run"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "1.6.0",
+		"@types/node": "22.19.19",
+		"typescript": "7.0.2",
+		"vitest": "4.1.12"
+	},
+	"files": [
+		"src",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	]
+}
