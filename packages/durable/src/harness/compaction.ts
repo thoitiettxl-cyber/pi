@@ -69,7 +69,10 @@ const TOOL_RESULT_MAX_CHARS = 2000;
 
 const SUMMARY_PREFIX =
 	"The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
-const SUMMARY_SUFFIX = "\n</summary>";
+const SUMMARY_SUFFIX = `
+</summary>
+
+Messages after this summary are more recent and take precedence. Work they show as completed is done, even if listed above as In Progress or Next Steps. Continue from the most recent message without redoing completed steps; if unsure, verify state with a cheap read instead.`;
 
 const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 

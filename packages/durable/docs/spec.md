@@ -6043,7 +6043,10 @@ the conversation.
 
 where `wrapped` is `"The conversation history before this point was compacted
 into the following summary:\n\n<summary>\n"`, the summary, and
-`"\n</summary>"`. The commit that places it also removes the task's status,
+`"\n</summary>"`, followed by a short continuity note: later messages take
+precedence, completed work must not be repeated even if the summary lists it as
+pending, and uncertainty should be resolved with a cheap read of state.
+The commit that places it also removes the task's status,
 removes `pi.live.compactionFailure`, and commits the task's `completed` outcome:
 
 - A blocking compaction appends the entry directly and completes with

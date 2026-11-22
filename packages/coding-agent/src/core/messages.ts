@@ -14,7 +14,9 @@ export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this p
 `;
 
 export const COMPACTION_SUMMARY_SUFFIX = `
-</summary>`;
+</summary>
+
+Messages after this summary are more recent and take precedence. Work they show as completed is done, even if listed above as In Progress or Next Steps. Continue from the most recent message without redoing completed steps; if unsure, verify state with a cheap read instead.`;
 
 export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch that this conversation came back from:
 

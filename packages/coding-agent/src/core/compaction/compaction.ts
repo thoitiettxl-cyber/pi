@@ -517,7 +517,7 @@ Use this EXACT format:
 
 ## Progress
 ### Done
-- [x] [Completed tasks/changes]
+- [x] [Completed tasks/changes: what changed, files, commands run and their results]
 
 ### In Progress
 - [ ] [Current work]
@@ -535,13 +535,13 @@ Use this EXACT format:
 - [Any data, examples, or references needed to continue]
 - [Or "(none)" if not applicable]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.`;
+Keep each section concise. Preserve exact file paths, function names, and error messages. In Progress and Next Steps must contain only work not yet completed in the conversation; never list completed work there.`;
 
 const UPDATE_SUMMARIZATION_INSTRUCTIONS = `Update the existing structured summary with new information. RULES:
 - PRESERVE all existing information from the previous summary
 - ADD new progress, decisions, and context from the new messages
-- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
-- UPDATE "Next Steps" based on what was accomplished
+- UPDATE the Progress section: move completed items to "Done" with concrete changes, files, commands run and their results
+- KEEP only work not yet completed in the conversation in "In Progress" and "Next Steps"; never list completed work there
 - PRESERVE exact file paths, function names, and error messages
 - If something is no longer relevant, you may remove it
 
@@ -934,12 +934,12 @@ Create a concise checkpoint of the user's request and the progress shown above. 
 [What did the user ask for?]
 
 ## Progress So Far
-- [Key decisions and work completed in these messages]
+- [Key decisions and completed work: what changed, files, commands run and their results]
 
 ## Context Needed to Continue
 - [Information from these messages needed to understand the later work]
 
-Only summarize information explicitly present above. Do not infer or recreate later messages.`;
+Only summarize information explicitly present above. Do not infer or recreate later messages. Any pending work must be unfinished in these messages; never present completed work as pending.`;
 
 /**
  * Generate summaries for compaction using prepared data.

@@ -397,7 +397,7 @@ describe("manual compaction", () => {
 		expect(marker).toMatchObject({ kind: "pi.compaction", head: u3.id, data: { reason: "manual" } });
 		expect(placed.status === "done" && placed.entry).toBe(marker.id);
 		expect(userText(marker.model?.[0])).toBe(
-			"The conversation history before this point was compacted into the following summary:\n\n<summary>\nSUMMARY\n</summary>",
+			"The conversation history before this point was compacted into the following summary:\n\n<summary>\nSUMMARY\n</summary>\n\nMessages after this summary are more recent and take precedence. Work they show as completed is done, even if listed above as In Progress or Next Steps. Continue from the most recent message without redoing completed steps; if unsure, verify state with a cheap read instead.",
 		);
 
 		// The model context is the summary followed by the kept entries.
