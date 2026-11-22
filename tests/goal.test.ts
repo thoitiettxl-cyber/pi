@@ -23,11 +23,11 @@ test("goals created mid-turn are charged usage and hit their budget", async () =
 	for (let turn = 0; turn < 2; turn++) {
 		await handlers.get("agent_start")!({}, ctx);
 		const creationMessage = { role: "assistant", usage: { input: 20, output: 10 }, stopReason: "toolUse" };
-		await handlers.get("message_start")!({ message: creationMessage }, ctx);
+		await handlers.get("context")!({ messages: [] }, ctx);
 		await handlers.get("message_end")!({ message: creationMessage }, ctx);
 		await tools.get("create_goal")!.execute("create", { objective: "test", token_budget: 10 }, undefined, undefined, ctx);
 		const message = { role: "assistant", usage: { input: 7, output: 5 }, stopReason: "stop" };
-		await handlers.get("message_start")!({ message }, ctx);
+		await handlers.get("context")!({ messages: [] }, ctx);
 		await handlers.get("message_end")!({ message }, ctx);
 		await handlers.get("agent_end")!({ messages: [creationMessage, message] }, ctx);
 		assert.equal(saved.at(-1)!.action, "account");
@@ -37,10 +37,11 @@ test("goals created mid-turn are charged usage and hit their budget", async () =
 	}
 });
 
-test("pausing a streaming response still charges it to the goal active at message start", async () => {
+test("pausing a streaming response still charges it to the goal active at request preparation", async () => {
 	const { handlers, tools, commands, saved, ctx } = setupGoal();
 	await tools.get("create_goal")!.execute("goal", { objective: "test" }, undefined, undefined, ctx);
-	await handlers.get("message_start")!({ message: { role: "assistant" } }, ctx);
+	await handlers.get("context")!({ messages: [] }, ctx);
+	await handlers.get("message_start")?.({ message: { role: "assistant" } }, ctx);
 	await commands.get("goal")!.handler("pause", ctx);
 	await handlers.get("message_end")!({ message: { role: "assistant", usage: { input: 7, output: 5 } } }, ctx);
 	assert.equal(saved.at(-1)!.goal.tokensUsed, 12);
@@ -49,17 +50,28 @@ test("pausing a streaming response still charges it to the goal active at messag
 	assert.equal(saved.at(-1)!.goal.tokensUsed, 12);
 });
 
+test("pausing after request preparation but before the first stream event still charges usage", async () => {
+	const { handlers, tools, commands, saved, ctx } = setupGoal();
+	await tools.get("create_goal")!.execute("goal", { objective: "test" }, undefined, undefined, ctx);
+	await handlers.get("context")!({ messages: [] }, ctx);
+	await commands.get("goal")!.handler("pause", ctx);
+	await handlers.get("message_start")?.({ message: { role: "assistant" } }, ctx);
+	await handlers.get("message_end")!({ message: { role: "assistant", usage: { input: 7, output: 5 } } }, ctx);
+	assert.equal(saved.at(-1)!.goal.tokensUsed, 12);
+	assert.equal(saved.at(-1)!.goal.status, "paused");
+});
+
 test("a replacement goal is charged only messages after its creation", async () => {
 	const { handlers, tools, saved, ctx } = setupGoal();
 	const oldMessage = { role: "assistant", usage: { input: 7, output: 5 }, stopReason: "toolUse" };
 	const newMessage = { role: "assistant", usage: { input: 3, output: 2 }, stopReason: "stop" };
 	await tools.get("create_goal")!.execute("old", { objective: "old" }, undefined, undefined, ctx);
 	await handlers.get("agent_start")!({}, ctx);
-	await handlers.get("message_start")!({ message: oldMessage }, ctx);
+	await handlers.get("context")!({ messages: [] }, ctx);
 	await handlers.get("message_end")!({ message: oldMessage }, ctx);
 	await tools.get("update_goal")!.execute("complete", { status: "complete" }, undefined, undefined, ctx);
 	await tools.get("create_goal")!.execute("new", { objective: "new", token_budget: 10 }, undefined, undefined, ctx);
-	await handlers.get("message_start")!({ message: newMessage }, ctx);
+	await handlers.get("context")!({ messages: [] }, ctx);
 	await handlers.get("message_end")!({ message: newMessage }, ctx);
 	await handlers.get("agent_end")!({ messages: [oldMessage, newMessage] }, ctx);
 	assert.equal(saved.at(-1)!.goal.tokensUsed, 5);
@@ -72,11 +84,12 @@ test("resuming or replacing a goal mid-response does not charge an unrelated res
 		const { handlers, tools, commands, saved, ctx } = setupGoal();
 		await tools.get("create_goal")!.execute("goal", { objective: "old" }, undefined, undefined, ctx);
 		await commands.get("goal")!.handler("pause", ctx);
-		await handlers.get("message_start")!({ message: { role: "assistant" } }, ctx);
+		await handlers.get("context")!({ messages: [] }, ctx);
 		if (replace) {
 			await commands.get("goal")!.handler("clear", ctx);
 			await tools.get("create_goal")!.execute("new", { objective: "new" }, undefined, undefined, ctx);
 		} else await commands.get("goal")!.handler("resume", ctx);
+		await handlers.get("message_start")?.({ message: { role: "assistant" } }, ctx);
 		await handlers.get("message_end")!({ message: { role: "assistant", usage: { input: 7, output: 5 } } }, ctx);
 		assert.equal(saved.at(-1)!.goal.tokensUsed, 0);
 	}
