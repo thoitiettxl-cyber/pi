@@ -28,6 +28,9 @@ const model: Model<"anthropic-messages"> = {
 	maxTokens: 8192,
 };
 const directories: string[] = [];
+const completionRule = expect.stringContaining(
+	"Open todos and a non-complete goal are NOT done",
+);
 
 afterEach(async () => {
 	vi.unstubAllEnvs();
@@ -176,6 +179,7 @@ describe("compaction continuity", () => {
 		const result = await compactWithContinuity(event, ctx);
 		const summary = result!.compaction!.summary;
 		expect(snapshot(summary)).toEqual({
+			completionRule,
 			goal: {
 				objective: "Ship the parser",
 				status: "paused",
@@ -232,6 +236,7 @@ describe("compaction continuity", () => {
 		);
 		const result = await compactWithContinuity(event, ctx);
 		expect(snapshot(result!.compaction!.summary)).toEqual({
+			completionRule,
 			openTodos: [],
 			openTodosOmitted: 0,
 		});
@@ -307,6 +312,7 @@ describe("compaction continuity", () => {
 		];
 		const result = await compactWithContinuity(event, ctx);
 		expect(snapshot(result!.compaction!.summary)).toEqual({
+			completionRule,
 			goal: { objective: "Finished goal", status: "complete" },
 		});
 	});
@@ -318,6 +324,7 @@ describe("compaction continuity", () => {
 		};
 		const result = await compactWithContinuity(event, ctx);
 		expect(snapshot(result!.compaction!.summary)).toEqual({
+			completionRule,
 			openTodos: [],
 			openTodosOmitted: 0,
 		});
@@ -346,7 +353,7 @@ describe("compaction continuity", () => {
 		);
 	});
 
-	it("registers only the compaction hook", () => {
+	it("registers compaction and verification hooks without a provider", () => {
 		const on = vi.fn<ExtensionAPI["on"]>();
 		const registerProvider = vi.fn<ExtensionAPI["registerProvider"]>();
 		// Only registration methods are used; Vitest mocks cannot preserve overloaded signatures.
@@ -356,6 +363,12 @@ describe("compaction continuity", () => {
 			"session_before_compact",
 			compactWithContinuity,
 		);
+		expect(on.mock.calls.map(([name]) => name)).toEqual([
+			"session_before_compact",
+			"session_compact",
+			"tool_call",
+			"tool_result",
+		]);
 	});
 
 	it.each(["initial", "update", "split"])(
@@ -385,6 +398,9 @@ describe("compaction continuity", () => {
 			);
 			expect(result?.compaction?.summary).toContain(
 				"Continue from the most recent message without redoing completed steps",
+			);
+			expect(result?.compaction?.summary).toContain(
+				"Open todos and a non-complete goal are NOT done",
 			);
 			expect(result?.compaction?.summary).toMatch(
 				/if unsure, verify state with a cheap read instead\.$/,

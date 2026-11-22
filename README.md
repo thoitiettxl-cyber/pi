@@ -31,7 +31,28 @@ Works with Ai's `goal.ts` and `todos.ts` without importing or bundling them:
   are completed, never pending. At most 30 open and 30 closed records are supplied
   to the summarizer; omitted counts are explicit.
 - Supplies live state to the summarizer and appends a `<live-state>` snapshot
-  containing the goal and only open todos, followed by the continuity note last.
+  containing the goal, only open todos, and the completion rule, followed by the
+  continuity note last. Open todos and a non-complete goal are **not done**:
+  perform and verify their work with tools before closing/completing them. Work
+  counts as done only when messages show it.
+
+## Post-compaction verification guard
+
+After every successful compaction, including pi's core fallback, the extension
+blocks `todo` create/update calls with status `closed` / `done` (case-insensitive)
+and `update_goal` calls with status `complete`. The rejection tells the model to
+check or do the remaining work with tools before retrying. Goal/todo getters and
+other state-management calls do not unlock completion.
+
+Completion is unlocked only after a non-goal/non-todo tool call started after
+that compaction returns a result (for example `read`, `bash`, `write` or `edit`).
+Failed/aborted compactions do not reset the window. Unrelated tools are never
+blocked, and no goal/todo tools are installed by this package.
+
+This is a minimum verification gate, not proof that every task was performed:
+one tool result, even an execution error, opens the gate. The model must still
+perform and verify all remaining work before closing it. The guard is in-memory
+for the loaded extension; restarting/reloading pi does not restore its window.
 
 Missing state is silently omitted. Read failures cannot prevent compaction.
 Missing model/auth and non-abort failures fall back to pi's default compaction;

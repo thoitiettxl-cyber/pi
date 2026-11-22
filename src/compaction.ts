@@ -5,6 +5,7 @@ import {
 	type SessionBeforeCompactResult,
 } from "@earendil-works/pi-coding-agent";
 import {
+	COMPLETION_RULE,
 	liveStateBlock,
 	liveStateInstructions,
 	readLiveState,
@@ -23,7 +24,7 @@ type CompactionContext = Pick<
 
 const INSTRUCTIONS = `Keep the existing summary format and headings. Done items must be concrete: what changed, files, commands run and their results. In Progress and Next Steps must contain only work not yet completed in the conversation; never list completed work there. Move completed items from In Progress or Next Steps to Done. For split-turn summaries, describe completed work concretely and never present it as pending. Only summarize information present in the conversation.`;
 
-const CONTINUITY_NOTE = `Messages after this summary are more recent and take precedence. Work they show as completed is done, even if listed above as In Progress or Next Steps. Continue from the most recent message without redoing completed steps; if unsure, verify state with a cheap read instead.`;
+const CONTINUITY_NOTE = `Messages after this summary are more recent and take precedence. Work they show as completed is done, even if listed above as In Progress or Next Steps. ${COMPLETION_RULE} Continue from the most recent message without redoing completed steps; if unsure, verify state with a cheap read instead.`;
 
 export async function compactWithContinuity(
 	event: SessionBeforeCompactEvent,
