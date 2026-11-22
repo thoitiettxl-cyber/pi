@@ -20,7 +20,7 @@ async function runScript(name: string, args: string[], mocks: Record<string, unk
 }
 
 test("logs paging resumes after the last printed sequence and survives ring-buffer wrap", async () => {
-	const store = { version: 4, nextSeq: 2006, dropped: 5, entries: Array.from({ length: 2000 }, (_, i) => ({ seq: i + 6, level: "log", message: String(i + 6) })) };
+	const store = { version: 5, nextSeq: 2006, dropped: 5, entries: Array.from({ length: 2000 }, (_, i) => ({ seq: i + 6, level: "log", message: String(i + 6) })) };
 	const page = vm.createContext({ window: { __agentLogs: store } });
 	const mocks = { ensureBroker: async () => {}, cdpCall: async () => {}, brokerRequest: async () => ({ events: [] }), evaluate: async (code: string) => vm.runInContext(code, page) };
 	const first = await runScript("logs-tail", ["--limit=2"], mocks);
@@ -30,6 +30,24 @@ test("logs paging resumes after the last printed sequence and survives ring-buff
 	assert.ok(next.includes("entries printed: 2; next --since=9"));
 	const wrapped = await runScript("logs-tail", ["--limit=2", "--since=2004"], mocks);
 	assert.ok(wrapped.some((line) => line.startsWith("[log] 2005 ")), wrapped.join("\n"));
+});
+
+test("logs follow restarts its cursor when the page buffer resets", async () => {
+	const store = { version: 5, generation: "old", nextSeq: 101, dropped: 0, entries: [{ seq: 100, level: "log", message: "old page" }] };
+	const page = vm.createContext({ window: { __agentLogs: store } });
+	let reads = 0;
+	const output = await runScript("logs-tail", ["--follow", "--for=0.05", "--poll", "20", "--since=99", "--limit=200"], {
+		ensureBroker: async () => {}, cdpCall: async () => {}, brokerRequest: async () => ({ events: [] }),
+		evaluate: async (code: string) => {
+			if (code.includes("const store") && ++reads === 2) {
+				store.generation = "new";
+				store.nextSeq = 2;
+				store.entries = [{ seq: 1, level: "log", message: "new page" }];
+			}
+			return vm.runInContext(code, page);
+		},
+	});
+	assert.ok(output.some((line) => line.startsWith("[log] new page")), output.join("\n"));
 });
 
 test("eval --json awaits promises and await expressions, preserving BigInts", async () => {
