@@ -65,6 +65,15 @@ and `pi --list-models devin` to inspect available models.
 
 ## How it works
 
+The package also improves compaction continuity for all providers in the session,
+not just Devin. It uses pi's built-in compactor with instructions to record concrete
+completed work and keep only unfinished work in In Progress / Next Steps. A note
+after the summary gives newer messages precedence and tells the model not to redo
+completed steps (use a cheap state read if unsure). Custom `/compact` instructions
+are preserved. Missing model/auth or summarization failures fall back to pi's
+default compaction; cancellation stops compaction. This is a workaround until
+the same prompt rules ship in pi; no exported core fix marker is available yet.
+
 This is an **unofficial internal Cascade API** client, ported from oh-my-pi (MIT).
 It sends self-contained protobuf messages using Connect framing to
 `https://server.codeium.com`, with the native Devin CLI identity and credential
@@ -121,10 +130,10 @@ In a pi monorepo worktree, dependencies may resolve from the parent checkout:
 
 ```sh
 npm run check
-../node_modules/.bin/vitest run test/stream.test.ts test/auth.test.ts test/discovery.test.ts
+node node_modules/vitest/dist/cli.js --run test/compaction.test.ts test/stream.test.ts test/auth.test.ts test/discovery.test.ts
 ```
 
-Tests use mocked fetch transports and real protobuf/Connect encoding; the OAuth
+Compaction tests run pi's compactor with stub streams. Other tests use mocked fetch transports and real protobuf/Connect encoding; the OAuth
 test uses a loopback HTTP callback. Tests do not call Devin.
 
 ## License

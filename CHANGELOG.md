@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Compaction continuity hook using pi's built-in summarizer: concrete completed
+  work, unfinished-only next steps, and newer-message precedence without redoing
+  completed steps. Preserves custom instructions, cancellation, and default fallback.
+
 ## [0.1.0]
 
 ### Added

@@ -1,6 +1,7 @@
 import { envApiKeyAuth, type Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { credentialServerUrl, devinOAuth } from "./auth.ts";
+import { compactWithContinuity } from "./compaction.ts";
 import { fetchDevinModels } from "./discovery.ts";
 import { type DevinModel, seedModels, toModel } from "./models.ts";
 import { type DevinOptions, streamDevin } from "./stream.ts";
@@ -57,4 +58,5 @@ export function devinProvider(): Provider {
 
 export default function extension(pi: ExtensionAPI): void {
 	pi.registerProvider(devinProvider());
+	pi.on("session_before_compact", compactWithContinuity);
 }
