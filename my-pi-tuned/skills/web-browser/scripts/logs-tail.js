@@ -320,6 +320,7 @@ async function drain({ json }) {
     printed += 1;
     cursor = entry.seq;
   }
+  if (printed >= limit) stopped = true;
   if (payload.dropped > 0 && entries.length === 0) {
     log(`page dropped ${payload.dropped} old entries (buffer cap ${MAX_ENTRIES})`);
   }

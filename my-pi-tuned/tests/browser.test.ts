@@ -50,6 +50,22 @@ test("logs follow restarts its cursor when the page buffer resets", async () => 
 	assert.ok(output.some((line) => line.startsWith("[log] new page")), output.join("\n"));
 });
 
+test("logs follow stops immediately when the last buffered record reaches the limit", async () => {
+	for (const limit of [0, 1]) {
+		const store = { version: 5, nextSeq: limit + 1, dropped: 0, entries: limit ? [{ seq: 1, level: "log", message: "only record" }] : [] };
+		const page = vm.createContext({ window: { __agentLogs: store } });
+		let reads = 0;
+		await runScript("logs-tail", ["--follow", "--for=0.05", "--poll", "20", `--limit=${limit}`], {
+			ensureBroker: async () => {}, cdpCall: async () => {}, brokerRequest: async () => ({ events: [] }),
+			evaluate: async (code: string) => {
+				if (code.includes("const store")) reads++;
+				return vm.runInContext(code, page);
+			},
+		});
+		assert.equal(reads, 1, `limit=${limit}`);
+	}
+});
+
 test("eval --json awaits promises and await expressions, preserving BigInts", async () => {
 	for (const code of ["Promise.resolve({answer:42})", "await Promise.resolve({answer:42})", "({answer:42})", "Promise.resolve({answer:42n})", "Promise.resolve(null)"]) {
 		const output = await runScript("eval", [code, "--json"], {
