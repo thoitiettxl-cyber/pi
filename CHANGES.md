@@ -43,3 +43,9 @@ control (`--session-control`, `list_sessions`), goal, todos, unified-edit, uv, s
 | Tested through CLI + local HTTP server, no mocks | 2 of 4 | 0 of 4 |
 | Tests written | 2-3 | 4-8 (more edge cases) |
 | Opened codebase-design during tdd | 0 of 4 | n/a |
+
+## Added: per-role subagent models with fallback
+- Optional `~/.pi/agent/subagent-models.json` (sample: `subagent-models.example.json`): an ordered `provider/model` list per role (`general`, `research`, `review`, `implement`), optional `thinking` per role, and `extensions` to load into research/review/implement children.
+- Order: explicit `provider`/`model` on the tool call (used alone), else the role list, then the parent model. Models missing from the catalog or without configured auth are skipped before start. A child that fails with an auth, billing, expired or unknown-model error before running any tool is restarted on the next model; after a tool ran it is never restarted. Skips and fallbacks are reported as `Model fallback:` lines.
+- `extensions` fixes `Unknown provider "devin"` in research/review/implement children: they start with `--no-extensions`, so a provider from a pi package (Devin) must be loaded explicitly. Tool restrictions are unchanged.
+- Live test (pi 1.6.0, Devin): research `devin/no-such-model-xyz` skipped -> `devin/swe-1-6`; general `expired/gpt-4o-mini` (fake key, 401) -> `devin/swe-1-6` at `low`; implement with no role list -> parent `devin/adaptive`, edited only `allowFiles`; explicit `devin/adaptive` bypassed the role list.

@@ -1,0 +1,6 @@
+{
+  "extensions": ["~/.pi/agent/git/github.com/thoitiettxl-cyber/pi/src/index.ts"],
+  "research": ["devin/swe-1-6", "devin/adaptive"],
+  "review": ["devin/adaptive"],
+  "implement": { "models": ["devin/fusion-claude-fable-5-1-high-sidekick-gpt-6-1-terra-high", "devin/adaptive"], "thinking": "high" }
+}

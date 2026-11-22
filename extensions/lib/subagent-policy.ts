@@ -222,3 +222,103 @@ export function constraintPreamble(input: PreambleInput): string {
 	lines.push("");
 	return lines.join("\n");
 }
+
+export const ROLE_MODELS_FILE = "subagent-models.json";
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export interface ModelRef {
+	provider: string;
+	model: string;
+}
+
+export interface RoleModelConfig {
+	models: ModelRef[];
+	thinking?: ThinkingLevel;
+}
+
+export type RoleModels = Partial<Record<Role, RoleModelConfig>>;
+
+export interface SubagentModelConfig {
+	roles: RoleModels;
+	/** Extensions loaded into research, review and implement children, which start with --no-extensions. */
+	extensions: string[];
+}
+
+export interface ModelCandidate extends ModelRef {
+	source: "explicit" | "role" | "parent";
+}
+
+/** Split "provider/model"; a bare id takes the fallback provider. */
+export function parseModelRef(value: string, fallbackProvider: string | undefined): ModelRef | undefined {
+	const trimmed = value.trim();
+	const slash = trimmed.indexOf("/");
+	if (slash > 0) return { provider: trimmed.slice(0, slash), model: trimmed.slice(slash + 1) };
+	if (!trimmed || !fallbackProvider) return undefined;
+	return { provider: fallbackProvider, model: trimmed };
+}
+
+/** Validate the role model file (trust boundary: user-edited JSON). */
+export function parseModelConfig(raw: unknown): SubagentModelConfig {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		throw new Error(`${ROLE_MODELS_FILE} must be an object keyed by role.`);
+	}
+	const result: RoleModels = {};
+	let extensions: string[] = [];
+	for (const [key, value] of Object.entries(raw)) {
+		if (key === "extensions") {
+			if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) {
+				throw new Error(`${ROLE_MODELS_FILE}: extensions must be a list of extension paths.`);
+			}
+			extensions = value;
+			continue;
+		}
+		const role = normalizeRole(key);
+		const entry = Array.isArray(value) || typeof value === "string" ? { models: value } : value;
+		if (!entry || typeof entry !== "object") throw new Error(`${ROLE_MODELS_FILE}: ${role} must be a list or object.`);
+		const { models, thinking } = entry as { models?: unknown; thinking?: unknown };
+		const list = typeof models === "string" ? [models] : models;
+		if (!Array.isArray(list) || list.length === 0 || list.some((item) => typeof item !== "string")) {
+			throw new Error(`${ROLE_MODELS_FILE}: ${role}.models must be a non-empty list of "provider/model" strings.`);
+		}
+		const refs = list.map((item: string) => {
+			const ref = parseModelRef(item, undefined);
+			if (!ref) throw new Error(`${ROLE_MODELS_FILE}: ${role} model "${item}" must be "provider/model".`);
+			return ref;
+		});
+		if (thinking !== undefined && !THINKING_LEVELS.includes(thinking as ThinkingLevel)) {
+			throw new Error(`${ROLE_MODELS_FILE}: ${role}.thinking must be one of ${THINKING_LEVELS.join(", ")}.`);
+		}
+		result[role] = { models: refs, thinking: thinking as ThinkingLevel | undefined };
+	}
+	return { roles: result, extensions };
+}
+
+/** Ordered models to try: an explicit override alone, else the role list then the parent model. */
+export function modelCandidates(
+	explicit: ModelRef | undefined,
+	roleConfig: RoleModelConfig | undefined,
+	parent: ModelRef | undefined,
+): ModelCandidate[] {
+	if (explicit) return [{ ...explicit, source: "explicit" }];
+	const all: ModelCandidate[] = [
+		...(roleConfig?.models ?? []).map((ref) => ({ ...ref, source: "role" as const })),
+		...(parent ? [{ ...parent, source: "parent" as const }] : []),
+	];
+	const seen = new Set<string>();
+	return all.filter((candidate) => {
+		const key = `${candidate.provider}/${candidate.model}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
+const UNAVAILABLE_PATTERN =
+	/\b(401|402|403|404)\b|unauthori[sz]ed|unauthenticated|forbidden|permission denied|expired|billing|payment|quota|insufficient|credit|subscription|no api key|api key|not found|not available|unavailable model|unsupported model|invalid model|does not exist|access denied/i;
+
+/** A child that failed before running any tool, with an auth/plan/model error, may retry on the next model. */
+export function shouldTryNextModel(result: { status: string; error?: string; toolResults?: number }): boolean {
+	if (result.status !== "failed" || (result.toolResults ?? 0) > 0) return false;
+	return UNAVAILABLE_PATTERN.test(result.error ?? "");
+}

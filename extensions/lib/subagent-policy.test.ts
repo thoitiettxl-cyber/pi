@@ -12,8 +12,12 @@ import {
 	childToolArgs,
 	constraintPreamble,
 	editAllowed,
+	modelCandidates,
+	parseModelRef,
+	parseModelConfig,
 	resolveOutputRelative,
 	shouldSkipDraft,
+	shouldTryNextModel,
 	type FlightView,
 	type Phase0Input,
 } from "./subagent-policy.ts";
@@ -163,4 +167,58 @@ test("new file under an allowlisted missing path is not allowed until the parent
 	await mkdir(path.join(root, "sub"));
 	const created = await canonicalEditPath(path.join(root, "sub", "new.ts"), root);
 	assert.equal(editAllowed(created, [canonical]), false);
+});
+
+test("parseModelConfig accepts lists, strings, objects and extensions and rejects bad entries", () => {
+	assert.deepEqual(
+		parseModelConfig({
+			extensions: ["~/.pi/agent/git/github.com/thoitiettxl-cyber/pi/src/index.ts"],
+			research: ["devin/swe-1-6", "devin/adaptive"],
+			review: "devin/adaptive",
+			implement: { models: ["devin/fusion-x-high-sidekick-y"], thinking: "high" },
+		}),
+		{
+			roles: {
+				research: { models: [{ provider: "devin", model: "swe-1-6" }, { provider: "devin", model: "adaptive" }], thinking: undefined },
+				review: { models: [{ provider: "devin", model: "adaptive" }], thinking: undefined },
+				implement: { models: [{ provider: "devin", model: "fusion-x-high-sidekick-y" }], thinking: "high" },
+			},
+			extensions: ["~/.pi/agent/git/github.com/thoitiettxl-cyber/pi/src/index.ts"],
+		},
+	);
+	assert.throws(() => parseModelConfig([]), /object keyed by role/);
+	assert.throws(() => parseModelConfig({ planner: ["devin/a"] }), /Unknown subagent role/);
+	assert.throws(() => parseModelConfig({ research: [] }), /non-empty list/);
+	assert.throws(() => parseModelConfig({ research: ["adaptive"] }), /provider\/model/);
+	assert.throws(() => parseModelConfig({ research: { models: ["devin/a"], thinking: "huge" } }), /thinking must be/);
+	assert.throws(() => parseModelConfig({ extensions: "a.ts" }), /extensions must be/);
+});
+
+test("modelCandidates: explicit wins alone, else role list then parent, deduplicated", () => {
+	const parent = { provider: "devin", model: "adaptive" };
+	const roleConfig = { models: [{ provider: "devin", model: "swe-1-6" }, { provider: "devin", model: "adaptive" }] };
+	assert.deepEqual(modelCandidates({ provider: "openai", model: "gpt" }, roleConfig, parent), [
+		{ provider: "openai", model: "gpt", source: "explicit" },
+	]);
+	assert.deepEqual(modelCandidates(undefined, roleConfig, parent), [
+		{ provider: "devin", model: "swe-1-6", source: "role" },
+		{ provider: "devin", model: "adaptive", source: "role" },
+	]);
+	assert.deepEqual(modelCandidates(undefined, undefined, parent), [{ ...parent, source: "parent" }]);
+	assert.deepEqual(modelCandidates(undefined, undefined, undefined), []);
+});
+
+test("parseModelRef splits provider/model and uses the fallback provider for bare ids", () => {
+	assert.deepEqual(parseModelRef("devin/swe-1-6", undefined), { provider: "devin", model: "swe-1-6" });
+	assert.deepEqual(parseModelRef("adaptive", "devin"), { provider: "devin", model: "adaptive" });
+	assert.equal(parseModelRef("adaptive", undefined), undefined);
+});
+
+test("shouldTryNextModel only for auth, plan or model errors before any tool ran", () => {
+	assert.equal(shouldTryNextModel({ status: "failed", error: "401 Unauthorized" }), true);
+	assert.equal(shouldTryNextModel({ status: "failed", error: "Subscription expired", toolResults: 0 }), true);
+	assert.equal(shouldTryNextModel({ status: "failed", error: "model not found: x" }), true);
+	assert.equal(shouldTryNextModel({ status: "failed", error: "401 Unauthorized", toolResults: 2 }), false);
+	assert.equal(shouldTryNextModel({ status: "failed", error: "Subagent session shut down before the task settled." }), false);
+	assert.equal(shouldTryNextModel({ status: "completed", error: "401" }), false);
 });

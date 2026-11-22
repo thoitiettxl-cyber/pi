@@ -67,6 +67,7 @@ Applies to comparison/parity, migration, integration, review of a progress repor
 Use the installed skill or tool before writing a substitute.
 - Multi-step work (3+ steps): track it with the `todo` tool. Long autonomous objectives: `create_goal` / `update_goal`.
 - Delegation: the `subagent` tool; load the subagent-orchestration skill first. research/review are read-only (max 3 in parallel); implement is the single writer, limited to `allowFiles`.
+- Subagent models: optional `~/.pi/agent/subagent-models.json` sets a fallback model list per role (see `subagent-models.example.json`); an unusable model (missing, no auth, expired account) falls through to the next, then the parent model.
 - Python: `uv` only. pip, poetry, `python -m pip|venv|py_compile` are blocked by the uv extension; use `uv run`, `uv add`, `uv run --with`.
 - Search and docs: load search-playbook first. Remote repo as reference: librarian (`~/.cache/checkouts`). Web page: web-browser `read.js` before a stateful session. Document to Markdown: summarize.
 - Unfamiliar or risky implementation: xia brief first. Priority vs order conflicts: sequence-execution-plan.

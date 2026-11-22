@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,7 +22,9 @@ import { Type } from "typebox";
 import {
 	MAX_SHARED,
 	READ_ONLY_TOOL_NAMES,
+	ROLE_MODELS_FILE,
 	ROLES,
+	THINKING_LEVELS,
 	assertCeiling,
 	assertHeldOut,
 	assertPhase0,
@@ -31,10 +34,16 @@ import {
 	constraintPreamble,
 	editAllowed,
 	flightKind,
+	modelCandidates,
+	parseModelConfig,
 	resolveOutputFile,
 	shouldSkipDraft,
+	shouldTryNextModel,
 	type FlightKind,
+	type ModelCandidate,
+	type ModelRef,
 	type Role,
+	type SubagentModelConfig,
 } from "./lib/subagent-policy.ts";
 
 const ATTACH_FLAG = "attach-subagent";
@@ -50,7 +59,6 @@ const PANE_DEAD_POLLS = 4;
 const PANE_PREVIEW_LINES = 18;
 const RESEARCH_STATUSES = ["draft", "finished"] as const;
 const IMPLEMENT_RESIDUAL = "bash is not path-restricted; allowFiles blocks edit and write only.";
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const EXTENSION_PATH = fileURLToPath(import.meta.url);
 
 type RunStatus = "queued" | "running" | "completed" | "failed";
@@ -65,6 +73,7 @@ interface ChildResult {
 	provider?: string;
 	model?: string;
 	thinking?: string;
+	toolResults?: number;
 	finishedAt: number;
 }
 
@@ -83,6 +92,7 @@ interface RunDetails {
 	invocation?: number;
 	outputFile?: string;
 	residual?: string;
+	fallbacks?: string[];
 	pane?: string;
 	output?: string;
 	sessionFile?: string;
@@ -269,6 +279,9 @@ function registerChildReporter(pi: ExtensionAPI, resultPath: string): void {
 			provider: typeof assistant?.provider === "string" ? assistant.provider : ctx.model?.provider,
 			model: typeof assistant?.model === "string" ? assistant.model : ctx.model?.id,
 			thinking: pi.getThinkingLevel(),
+			toolResults: ctx.sessionManager
+				.getBranch()
+				.filter((entry) => entry.type === "message" && entry.message.role === "toolResult").length,
 			finishedAt: Date.now(),
 		};
 
@@ -424,6 +437,7 @@ function resultText(details: RunDetails): string {
 		`Model: ${details.provider}/${details.model} (${details.thinking})`,
 	];
 	if (details.role) lines.push(`Role: ${details.role}`);
+	for (const fallback of details.fallbacks ?? []) lines.push(`Model fallback: ${fallback}`);
 	if (details.invocation !== undefined) lines.push(`Invocation: ${details.invocation}`);
 	lines.push(
 		`tmux: ${details.tmuxSession}`,
@@ -468,6 +482,22 @@ async function validateCwd(cwd: string): Promise<void> {
 function isSameOrDescendant(base: string, candidate: string): boolean {
 	const relative = path.relative(base, candidate);
 	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+async function loadModelConfig(): Promise<SubagentModelConfig> {
+	const file = path.join(getAgentDir(), ROLE_MODELS_FILE);
+	let config: SubagentModelConfig;
+	try {
+		config = parseModelConfig(JSON.parse(await readFile(file, "utf8")));
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { roles: {}, extensions: [] };
+		throw new Error(`Invalid ${file}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	const home = os.homedir();
+	const extensions = config.extensions.map((entry) =>
+		entry.startsWith("~/") ? path.join(home, entry.slice(2)) : path.resolve(getAgentDir(), entry),
+	);
+	return { ...config, extensions };
 }
 
 function resolveModel(
@@ -718,28 +748,53 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 				};
 			}
 
-			const selectedModel = resolveModel(ctx, params.provider, params.model);
-			const thinking = params.thinking ?? pi.getThinkingLevel();
-			const childSessionId = randomUUID();
-			const runDir = path.join(getAgentDir(), RUNS_DIR, ctx.sessionManager.getSessionId(), childSessionId);
-			const resultPath = path.join(runDir, "result.json");
-			const tmuxSession = tmuxSessionName(childSessionId);
-			const tmuxTarget = `${tmuxSession}:0.0`;
-			const spec: RunSpec = {
-				task: params.task,
-				cwd,
-				attachmentId: childSessionId,
-				tmuxSession,
-				tmuxTarget,
-				attachCommand: "",
-				captureCommand: "",
-				killCommand: "",
-				provider: selectedModel.provider,
-				model: selectedModel.model,
-				thinking,
-				trusted: isSameOrDescendant(path.resolve(ctx.cwd), cwd) && ctx.isProjectTrusted(),
+			const modelConfig = await loadModelConfig();
+			const roleConfig = modelConfig.roles[role];
+			const explicit =
+				params.provider?.trim() || params.model?.trim() ? resolveModel(ctx, params.provider, params.model) : undefined;
+			const parent: ModelRef | undefined = ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
+			const fallbacks: string[] = [];
+			const candidates = modelCandidates(explicit, roleConfig, parent).filter((candidate) => {
+				if (candidate.source !== "role") return true;
+				const label = `${candidate.provider}/${candidate.model}`;
+				const known = ctx.modelRegistry.find(candidate.provider, candidate.model);
+				if (!known) {
+					fallbacks.push(`${label} skipped: not in the model catalog`);
+					return false;
+				}
+				if (!ctx.modelRegistry.hasConfiguredAuth(known)) {
+					fallbacks.push(`${label} skipped: no login or API key for ${candidate.provider}`);
+					return false;
+				}
+				return true;
+			});
+			if (candidates.length === 0) {
+				throw new Error(
+					["No usable model. Pass both provider and model to the subagent tool.", ...fallbacks].join("\n"),
+				);
+			}
+			const thinkingFor = (candidate: ModelCandidate): string =>
+				params.thinking ?? (candidate.source === "role" ? roleConfig?.thinking : undefined) ?? pi.getThinkingLevel();
+			const newSpec = (candidate: ModelCandidate): RunSpec => {
+				const childSessionId = randomUUID();
+				const tmuxSession = tmuxSessionName(childSessionId);
+				const spec: RunSpec = {
+					task: params.task,
+					cwd,
+					attachmentId: childSessionId,
+					tmuxSession,
+					tmuxTarget: `${tmuxSession}:0.0`,
+					attachCommand: "",
+					captureCommand: "",
+					killCommand: "",
+					provider: candidate.provider,
+					model: candidate.model,
+					thinking: thinkingFor(candidate),
+					trusted: isSameOrDescendant(path.resolve(ctx.cwd), cwd) && ctx.isProjectTrusted(),
+				};
+				updateTmuxCommands(spec);
+				return spec;
 			};
-			updateTmuxCommands(spec);
 
 			let artifactSha256: string | undefined;
 			if (role === "review") {
@@ -754,6 +809,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 				outputFile = await resolveOutputFile(outputsRoot(), params.outputPath ?? "");
 			}
 
+			let spec = newSpec(candidates[0]);
 			let flight: Flight;
 			try {
 				let announcedWait = false;
@@ -775,143 +831,184 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 				throw error;
 			}
 
-			flight.tmuxSession = tmuxSession;
-			let sessionStarted = false;
+			let reapFailed: string | undefined;
+			const runAttempt = async (
+				attemptSpec: RunSpec,
+			): Promise<{ childResult: ChildResult; finalPane: string; startedAt: number }> => {
+				const { tmuxSession, tmuxTarget } = attemptSpec;
+				const runDir = path.join(getAgentDir(), RUNS_DIR, ctx.sessionManager.getSessionId(), attemptSpec.attachmentId);
+				const resultPath = path.join(runDir, "result.json");
+				flight.tmuxSession = tmuxSession;
+				let sessionStarted = false;
+				try {
+					await mkdir(runDir, { recursive: true, mode: 0o700 });
+					const promptPath = path.join(runDir, "task.md");
+					const sessionDir = path.join(runDir, "session");
+					await mkdir(sessionDir, { recursive: true, mode: 0o700 });
+					const preamble =
+						role === "general"
+							? ""
+							: constraintPreamble({
+									role,
+									invocation: flight.invocation,
+									outcome: params.outcome ?? "",
+									metric: params.metric ?? "",
+									floor: params.floor ?? "",
+									target: params.target ?? "",
+									outputPath: outputFile,
+									artifactPath: role === "review" ? path.resolve(cwd, params.artifactPath ?? "") : undefined,
+									artifactSha256,
+									allowFiles: params.allowFiles,
+								});
+					await writeFile(promptPath, `${preamble}# Delegated task\n\n${params.task}\n`, {
+						encoding: "utf8",
+						mode: 0o600,
+					});
+
+					const allowAbsolute = (params.allowFiles ?? []).map((file) => path.resolve(cwd, file));
+					const piArgs = [
+						...getPiInvocationParts(),
+						"--provider",
+						attemptSpec.provider,
+						"--model",
+						attemptSpec.model,
+						"--thinking",
+						attemptSpec.thinking,
+						"--session-dir",
+						sessionDir,
+						"--session-id",
+						attemptSpec.attachmentId,
+						"--name",
+						tmuxSession,
+						attemptSpec.trusted ? "--approve" : "--no-approve",
+						...childToolArgs(role),
+						...(role === "general" ? [] : modelConfig.extensions.flatMap((entry) => ["--extension", entry])),
+						"--extension",
+						EXTENSION_PATH,
+						`@${promptPath}`,
+					];
+					const childCommand = [
+						"exec env",
+						`${CHILD_ENV}=1`,
+						`${RESULT_ENV}=${shellQuote(resultPath)}`,
+						`${ROLE_ENV}=${shellQuote(role)}`,
+						...(role === "implement" ? [`${ALLOW_ENV}=${shellQuote(JSON.stringify(allowAbsolute))}`] : []),
+						piArgs.map(shellQuote).join(" "),
+					].join(" ");
+
+					const tmuxVersion = await pi.exec("tmux", ["-V"], { timeout: 5_000 });
+					if (tmuxVersion.code !== 0) {
+						throw new Error(`tmux is required for subagents: ${tmuxVersion.stderr.trim() || "tmux not found"}`);
+					}
+
+					const startedAt = Date.now();
+					const created = await pi.exec("tmux", tmuxArgs("new-session", "-d", "-s", tmuxSession, "-n", "pi", "-c", cwd));
+					if (created.code !== 0) {
+						throw new Error(`Failed to create tmux session: ${created.stderr.trim() || created.stdout.trim()}`);
+					}
+					sessionStarted = true;
+
+					const remain = await pi.exec(
+						"tmux",
+						tmuxArgs("set-window-option", "-t", `${tmuxSession}:0`, "remain-on-exit", "on"),
+					);
+					if (remain.code !== 0) throw new Error(remain.stderr.trim() || "Failed to set remain-on-exit.");
+
+					const initialDetails = detailsFor(attemptSpec, "running", { startedAt, role, invocation: flight.invocation });
+					onUpdate?.({ content: [{ type: "text", text: partialText(initialDetails) }], details: initialDetails });
+
+					const sent = await pi.exec("tmux", tmuxArgs("send-keys", "-t", tmuxTarget, "-l", "--", childCommand));
+					if (sent.code !== 0) throw new Error(sent.stderr.trim() || "Failed to start child Pi.");
+					const entered = await pi.exec("tmux", tmuxArgs("send-keys", "-t", tmuxTarget, "Enter"));
+					if (entered.code !== 0) throw new Error(entered.stderr.trim() || "Failed to submit child command.");
+
+					let lastPane = "";
+					let childResult: ChildResult | undefined;
+					while (!childResult) {
+						if (signal?.aborted) throw new Error("Subagent aborted.");
+						try {
+							childResult = JSON.parse(await readFile(resultPath, "utf8")) as ChildResult;
+							break;
+						} catch {
+							// The result file is created atomically when the child settles.
+						}
+
+						const paneResult = await pi.exec("tmux", tmuxArgs("capture-pane", "-p", "-J", "-t", tmuxTarget), {
+							timeout: 5_000,
+						});
+						if (paneResult.code === 0) {
+							const pane = trimPane(paneResult.stdout);
+							if (pane && pane !== lastPane) {
+								lastPane = pane;
+								const details = detailsFor(attemptSpec, "running", {
+									pane,
+									startedAt,
+									role,
+									invocation: flight.invocation,
+								});
+								onUpdate?.({ content: [{ type: "text", text: partialText(details) }], details });
+							}
+						}
+
+						const dead = await pi.exec("tmux", tmuxArgs("display-message", "-p", "-t", tmuxTarget, "#{pane_dead}"));
+						if (dead.code === 0 && dead.stdout.trim() === "1") {
+							let reported = false;
+							for (let attempt = 0; attempt < PANE_DEAD_POLLS; attempt++) {
+								await abortableDelay(POLL_INTERVAL_MS, signal);
+								try {
+									childResult = JSON.parse(await readFile(resultPath, "utf8")) as ChildResult;
+									reported = true;
+									break;
+								} catch {
+									// A late rename can land after pane_dead.
+								}
+							}
+							if (!reported) {
+								throw new Error(
+									`Child Pi exited before reporting a result.\n\n${lastPane || "No pane output."}\n\nInspect: ${attemptSpec.captureCommand}`,
+								);
+							}
+							break;
+						}
+
+						await abortableDelay(POLL_INTERVAL_MS, signal);
+					}
+
+					const finalPaneResult = await pi.exec("tmux", tmuxArgs("capture-pane", "-p", "-J", "-t", tmuxTarget), {
+						timeout: 5_000,
+					});
+					const finalPane = finalPaneResult.code === 0 ? trimPane(finalPaneResult.stdout) : lastPane;
+					if (!childResult) throw new Error("Subagent finished without a result.");
+					return { childResult, finalPane, startedAt };
+				} finally {
+					if (sessionStarted && !(await reap(tmuxSession))) reapFailed = tmuxSession;
+				}
+			};
+
 			let pendingError: unknown;
 			let toolResult: { content: [{ type: "text"; text: string }]; details: RunDetails } | undefined;
 			try {
 				await appendLedger({ action: "spawn", invocation: flight.invocation, role, ceiling: params.ceiling });
-				await mkdir(runDir, { recursive: true, mode: 0o700 });
-				const promptPath = path.join(runDir, "task.md");
-				const sessionDir = path.join(runDir, "session");
-				await mkdir(sessionDir, { recursive: true, mode: 0o700 });
-				const preamble =
-					role === "general"
-						? ""
-						: constraintPreamble({
-								role,
-								invocation: flight.invocation,
-								outcome: params.outcome ?? "",
-								metric: params.metric ?? "",
-								floor: params.floor ?? "",
-								target: params.target ?? "",
-								outputPath: outputFile,
-								artifactPath: role === "review" ? path.resolve(cwd, params.artifactPath ?? "") : undefined,
-								artifactSha256,
-								allowFiles: params.allowFiles,
-							});
-				await writeFile(promptPath, `${preamble}# Delegated task\n\n${params.task}\n`, {
-					encoding: "utf8",
-					mode: 0o600,
-				});
-
-				const allowAbsolute = (params.allowFiles ?? []).map((file) => path.resolve(cwd, file));
-				const piArgs = [
-					...getPiInvocationParts(),
-					"--provider",
-					selectedModel.provider,
-					"--model",
-					selectedModel.model,
-					"--thinking",
-					thinking,
-					"--session-dir",
-					sessionDir,
-					"--session-id",
-					childSessionId,
-					"--name",
-					tmuxSession,
-					spec.trusted ? "--approve" : "--no-approve",
-					...childToolArgs(role),
-					"--extension",
-					EXTENSION_PATH,
-					`@${promptPath}`,
-				];
-				const childCommand = [
-					"exec env",
-					`${CHILD_ENV}=1`,
-					`${RESULT_ENV}=${shellQuote(resultPath)}`,
-					`${ROLE_ENV}=${shellQuote(role)}`,
-					...(role === "implement" ? [`${ALLOW_ENV}=${shellQuote(JSON.stringify(allowAbsolute))}`] : []),
-					piArgs.map(shellQuote).join(" "),
-				].join(" ");
-
-				const tmuxVersion = await pi.exec("tmux", ["-V"], { timeout: 5_000 });
-				if (tmuxVersion.code !== 0) {
-					throw new Error(`tmux is required for subagents: ${tmuxVersion.stderr.trim() || "tmux not found"}`);
-				}
-
-				const startedAt = Date.now();
-				const created = await pi.exec("tmux", tmuxArgs("new-session", "-d", "-s", tmuxSession, "-n", "pi", "-c", cwd));
-				if (created.code !== 0) {
-					throw new Error(`Failed to create tmux session: ${created.stderr.trim() || created.stdout.trim()}`);
-				}
-				sessionStarted = true;
-
-				const remain = await pi.exec(
-					"tmux",
-					tmuxArgs("set-window-option", "-t", `${tmuxSession}:0`, "remain-on-exit", "on"),
-				);
-				if (remain.code !== 0) throw new Error(remain.stderr.trim() || "Failed to set remain-on-exit.");
-
-				const initialDetails = detailsFor(spec, "running", { startedAt, role, invocation: flight.invocation });
-				onUpdate?.({ content: [{ type: "text", text: partialText(initialDetails) }], details: initialDetails });
-
-				const sent = await pi.exec("tmux", tmuxArgs("send-keys", "-t", tmuxTarget, "-l", "--", childCommand));
-				if (sent.code !== 0) throw new Error(sent.stderr.trim() || "Failed to start child Pi.");
-				const entered = await pi.exec("tmux", tmuxArgs("send-keys", "-t", tmuxTarget, "Enter"));
-				if (entered.code !== 0) throw new Error(entered.stderr.trim() || "Failed to submit child command.");
-
-				let lastPane = "";
-				let childResult: ChildResult | undefined;
-				while (!childResult) {
-					if (signal?.aborted) throw new Error("Subagent aborted.");
-					try {
-						childResult = JSON.parse(await readFile(resultPath, "utf8")) as ChildResult;
-						break;
-					} catch {
-						// The result file is created atomically when the child settles.
-					}
-
-					const paneResult = await pi.exec("tmux", tmuxArgs("capture-pane", "-p", "-J", "-t", tmuxTarget), {
-						timeout: 5_000,
+				let attempt: { childResult: ChildResult; finalPane: string; startedAt: number } | undefined;
+				for (let index = 0; index < candidates.length; index++) {
+					if (index > 0) spec = newSpec(candidates[index]);
+					attempt = await runAttempt(spec);
+					if (reapFailed) break;
+					const next = candidates[index + 1];
+					if (!next || !shouldTryNextModel(attempt.childResult)) break;
+					const reason = `${spec.provider}/${spec.model} failed: ${(attempt.childResult.error ?? "").split("\n", 1)[0]}`;
+					fallbacks.push(reason);
+					await appendLedger({
+						action: "model-fallback",
+						invocation: flight.invocation,
+						role,
+						from: `${spec.provider}/${spec.model}`,
+						to: `${next.provider}/${next.model}`,
+						error: attempt.childResult.error,
 					});
-					if (paneResult.code === 0) {
-						const pane = trimPane(paneResult.stdout);
-						if (pane && pane !== lastPane) {
-							lastPane = pane;
-							const details = detailsFor(spec, "running", { pane, startedAt, role, invocation: flight.invocation });
-							onUpdate?.({ content: [{ type: "text", text: partialText(details) }], details });
-						}
-					}
-
-					const dead = await pi.exec("tmux", tmuxArgs("display-message", "-p", "-t", tmuxTarget, "#{pane_dead}"));
-					if (dead.code === 0 && dead.stdout.trim() === "1") {
-						let reported = false;
-						for (let attempt = 0; attempt < PANE_DEAD_POLLS; attempt++) {
-							await abortableDelay(POLL_INTERVAL_MS, signal);
-							try {
-								childResult = JSON.parse(await readFile(resultPath, "utf8")) as ChildResult;
-								reported = true;
-								break;
-							} catch {
-								// A late rename can land after pane_dead.
-							}
-						}
-						if (!reported) {
-							throw new Error(
-								`Child Pi exited before reporting a result.\n\n${lastPane || "No pane output."}\n\nInspect: ${spec.captureCommand}`,
-							);
-						}
-						break;
-					}
-
-					await abortableDelay(POLL_INTERVAL_MS, signal);
 				}
-
-				const finalPaneResult = await pi.exec("tmux", tmuxArgs("capture-pane", "-p", "-J", "-t", tmuxTarget), {
-					timeout: 5_000,
-				});
-				const finalPane = finalPaneResult.code === 0 ? trimPane(finalPaneResult.stdout) : lastPane;
+				if (!attempt) throw new Error("Subagent finished without a result.");
+				const { childResult, finalPane, startedAt } = attempt;
 				const status: RunStatus = childResult.status === "completed" ? "completed" : "failed";
 				let rawOutput = childResult.output.trim();
 				if (childResult.status === "failed" && childResult.error?.trim()) {
@@ -938,6 +1035,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 					provider: childResult.provider ?? spec.provider,
 					model: childResult.model ?? spec.model,
 					thinking: childResult.thinking ?? spec.thinking,
+					fallbacks: fallbacks.length > 0 ? fallbacks : undefined,
 					startedAt,
 					finishedAt: childResult.finishedAt,
 				});
@@ -947,15 +1045,12 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 			} catch (error) {
 				pendingError = error;
 			} finally {
-				let reapError: Error | undefined;
-				if (sessionStarted) {
-					const reaped = await reap(tmuxSession);
-					if (!reaped) reapError = new Error(`Failed to reap tmux session ${tmuxSession}.`);
-				}
-				if (!reapError) await releaseFlight(flight.id);
-				if (reapError) {
+				if (reapFailed) {
 					const message = pendingError instanceof Error ? pendingError.message : pendingError ? String(pendingError) : "";
-					pendingError = new Error(message ? `${message}\n${reapError.message}` : reapError.message);
+					const reapError = `Failed to reap tmux session ${reapFailed}.`;
+					pendingError = new Error(message ? `${message}\n${reapError}` : reapError);
+				} else {
+					await releaseFlight(flight.id);
 				}
 			}
 			if (pendingError) throw pendingError;
