@@ -43,3 +43,23 @@ test("eval --json awaits promises and await expressions, preserving BigInts", as
 		assert.deepEqual(JSON.parse(output.join("\n")), expected, code);
 	}
 });
+
+test("stop --keep-server retains endpoint ownership but drops the broker pid", async () => {
+	for (const keep of [true, false]) {
+		let state: Record<string, unknown> | null = { serverPid: 123, brokerPid: 456, port: 9222, host: "127.0.0.1", stealth: true };
+		try {
+			await runScript("stop", keep ? ["--keep-server"] : [], {
+				BROKER_PID_FILE: "unused", STORAGE_DIR: "unused", getPort: () => 9222,
+				readState: () => state, clearState: () => { state = null; }, writeState: (value: Record<string, unknown>) => { state = value; },
+				isProcessAlive: () => false, existsSync: () => false, execFileSync: () => "", findObscuraProcesses: () => [],
+			});
+		} catch (error) {
+			assert.match(String(error), /exit 0/);
+		}
+		if (keep) {
+			assert.equal(state?.serverPid, 123);
+			assert.equal(state?.brokerPid, undefined);
+			assert.equal(state?.port, 9222);
+		} else assert.equal(state, null);
+	}
+});
