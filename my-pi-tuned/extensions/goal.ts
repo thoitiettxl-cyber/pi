@@ -581,11 +581,6 @@ export default function goalExtension(pi: ExtensionAPI) {
 		continuationQueued = false;
 	});
 
-	pi.on("message_start", async (event) => {
-		if (event.message.role !== "assistant") return;
-		responseGoalId = goal?.status === "active" ? goal.id : null;
-	});
-
 	pi.on("message_end", async (event, ctx) => {
 		if (event.message.role !== "assistant") return;
 		const startedForGoalId = responseGoalId;
@@ -648,6 +643,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("context", async (event) => {
+		responseGoalId = goal?.status === "active" ? goal.id : null;
 		let lastContinuationIndex = -1;
 		for (let i = 0; i < event.messages.length; i++) {
 			const msg = event.messages[i] as { customType?: string; details?: { goalId?: string } };
