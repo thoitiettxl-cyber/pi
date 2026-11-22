@@ -6,7 +6,6 @@
   "pi": {
     "extensions": [
       "./provider-devin/src/index.ts",
-      "./compaction-continuity/src/index.ts",
       "./my-pi-tuned/extensions/*.ts"
     ],
     "skills": ["./my-pi-tuned/skills"]
