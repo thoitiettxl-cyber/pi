@@ -374,6 +374,7 @@ function goalStopStatusForAssistantError(message: { errorMessage?: string } | un
 export default function goalExtension(pi: ExtensionAPI) {
 	let goal: Goal | null = null;
 	let activeSinceMs: number | null = null;
+	let responseGoalId: string | null = null;
 	let continuationQueued = false;
 
 	function currentGoalSnapshot(): Goal | null {
@@ -551,6 +552,7 @@ export default function goalExtension(pi: ExtensionAPI) {
 	function reconstructState(ctx: ExtensionContext): void {
 		goal = null;
 		activeSinceMs = null;
+		responseGoalId = null;
 		continuationQueued = false;
 
 		for (const entry of ctx.sessionManager.getBranch()) {
@@ -579,8 +581,16 @@ export default function goalExtension(pi: ExtensionAPI) {
 		continuationQueued = false;
 	});
 
+	pi.on("message_start", async (event) => {
+		if (event.message.role !== "assistant") return;
+		responseGoalId = goal?.status === "active" ? goal.id : null;
+	});
+
 	pi.on("message_end", async (event, ctx) => {
-		if (!goal || goal.status !== "active") return;
+		if (event.message.role !== "assistant") return;
+		const startedForGoalId = responseGoalId;
+		responseGoalId = null;
+		if (!goal || goal.id !== startedForGoalId) return;
 		const tokens = assistantUsageTokens([event.message]);
 		if (tokens <= 0) return;
 		goal.tokensUsed += tokens;
