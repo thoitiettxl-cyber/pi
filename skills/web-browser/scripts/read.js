@@ -154,7 +154,7 @@ child.on("close", (code) => {
   // `fetch` writes a "Page loaded: <url> - <title>" banner to stderr.
   const banner = stderr.split("\n").find((l) => l.startsWith("Page loaded:"));
   if (has("--raw") || dumpFlag === "original") {
-    process.stdout.write(stdout);
+    process.stdout.write(dumpFlag === "original" ? Buffer.concat(stdoutChunks) : stdout);
     return;
   }
 
