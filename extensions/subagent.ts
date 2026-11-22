@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, open, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,40 +11,368 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
+	DefaultPackageManager,
 	getAgentDir,
 	isToolCallEventType,
+	SettingsManager,
 	truncateHead,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import {
-	MAX_SHARED,
-	READ_ONLY_TOOL_NAMES,
-	ROLE_MODELS_FILE,
-	ROLES,
-	THINKING_LEVELS,
-	assertCeiling,
-	assertHeldOut,
-	assertPhase0,
-	canAdmit,
-	canonicalEditPath,
-	childToolArgs,
-	constraintPreamble,
-	editAllowed,
-	flightKind,
-	modelCandidates,
-	parseModelConfig,
-	resolveOutputFile,
-	shouldSkipDraft,
-	shouldTryNextModel,
-	type FlightKind,
-	type ModelCandidate,
-	type ModelRef,
-	type Role,
-	type SubagentModelConfig,
-} from "./lib/subagent-policy.ts";
+export const ROLES = ["general", "research", "review", "implement"] as const;
+export type Role = (typeof ROLES)[number];
+export const MAX_SHARED = 3;
+export const READ_ONLY_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
+
+const RESEARCH_EXCLUDE = "edit,write,bash,powershell,subagent,codemode,tool_search,mcp__*";
+const IMPLEMENT_EXCLUDE = "subagent,codemode,tool_search,mcp__*,powershell";
+
+export type FlightKind = "exclusive" | "shared";
+
+export interface FlightView {
+	kind: FlightKind;
+}
+
+export interface Phase0Input {
+	role: string;
+	outcome?: string;
+	metric?: string;
+	floor?: string;
+	target?: string;
+	outputPath?: string;
+	allowFiles?: readonly string[];
+	artifactPath?: string;
+	ceiling?: number;
+	heldOut?: boolean;
+	researchStatus?: string;
+}
+
+export interface PreambleInput {
+	role: Role;
+	invocation: number;
+	outcome: string;
+	metric: string;
+	floor: string;
+	target: string;
+	outputPath?: string;
+	artifactPath?: string;
+	artifactSha256?: string;
+	allowFiles?: readonly string[];
+}
+
+function filled(value: string | undefined): boolean {
+	return Boolean(value?.trim());
+}
+
+export function normalizeRole(role: string): Role {
+	const trimmed = role.trim();
+	if (trimmed === "general" || trimmed === "research" || trimmed === "review" || trimmed === "implement") {
+		return trimmed;
+	}
+	throw new Error(`Unknown subagent role: ${role}. Use general, research, review, or implement.`);
+}
+
+export function assertPhase0(input: Phase0Input): Role {
+	const role = normalizeRole(input.role);
+	if (role === "general") return role;
+	const missing = (["outcome", "metric", "floor", "target"] as const).filter((key) => !filled(input[key]));
+	if (missing.length > 0) {
+		throw new Error(`subagent role ${role} requires ${missing.join(", ")} before spawn.`);
+	}
+	if ((role === "research" || role === "review") && !filled(input.outputPath)) {
+		throw new Error(`subagent role ${role} requires outputPath before spawn.`);
+	}
+	if (role === "implement" && !input.allowFiles?.some((file) => file.trim())) {
+		throw new Error("subagent role implement requires allowFiles before spawn.");
+	}
+	if (role === "review" && !filled(input.artifactPath)) {
+		throw new Error("subagent role review requires artifactPath before spawn.");
+	}
+	if (input.ceiling !== undefined && (!Number.isInteger(input.ceiling) || input.ceiling < 1)) {
+		throw new Error("subagent ceiling must be a positive integer.");
+	}
+	return role;
+}
+
+export function shouldSkipDraft(role: Role, researchStatus: string | undefined): boolean {
+	return role === "implement" && researchStatus === "draft";
+}
+
+export function flightKind(role: Role): FlightKind {
+	return role === "research" || role === "review" ? "shared" : "exclusive";
+}
+
+export function canAdmit(flights: readonly FlightView[], kind: FlightKind, maxShared = MAX_SHARED): boolean {
+	if (kind === "exclusive") return flights.length === 0;
+	if (flights.some((flight) => flight.kind === "exclusive")) return false;
+	return flights.filter((flight) => flight.kind === "shared").length < maxShared;
+}
+
+export function assertCeiling(count: number, ceiling: number | undefined): void {
+	if (ceiling === undefined) return;
+	if (!Number.isInteger(ceiling) || ceiling < 1) {
+		throw new Error("subagent ceiling must be a positive integer.");
+	}
+	if (count + 1 > ceiling) {
+		throw new Error(`Spend ceiling ${ceiling} exceeded; refused invocation ${count + 1}.`);
+	}
+}
+
+export function isSameOrDescendant(base: string, candidate: string): boolean {
+	const relative = path.relative(base, candidate);
+	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+export function assertHeldOut(parentCwd: string, childCwd: string, heldOut: boolean | undefined): void {
+	if (!heldOut) return;
+	if (isSameOrDescendant(path.resolve(parentCwd), path.resolve(childCwd))) {
+		throw new Error("heldOut requires a cwd outside the parent working directory.");
+	}
+}
+
+export function resolveOutputRelative(outputRoot: string, requested: string): string {
+	const trimmed = requested.trim();
+	if (!trimmed) throw new Error("outputPath must not be empty.");
+	if (path.isAbsolute(trimmed)) {
+		throw new Error("outputPath must be relative to the subagent outputs directory.");
+	}
+	if (trimmed.split(/[\\/]/).some((part) => part === "..")) {
+		throw new Error("outputPath must not contain ..");
+	}
+	const full = path.resolve(outputRoot, trimmed);
+	if (!isSameOrDescendant(path.resolve(outputRoot), full)) {
+		throw new Error("outputPath escapes the subagent outputs directory.");
+	}
+	return full;
+}
+
+export async function resolveOutputFile(outputRoot: string, requested: string): Promise<string> {
+	await mkdir(outputRoot, { recursive: true, mode: 0o700 });
+	const lexical = resolveOutputRelative(outputRoot, requested);
+	const rootReal = await realpath(outputRoot);
+	const relative = path.relative(path.resolve(outputRoot), lexical);
+	const parts = relative.split(path.sep);
+	const fileName = parts.pop();
+	if (!fileName || fileName === "." || fileName === "..") {
+		throw new Error("outputPath must name a file.");
+	}
+	let cursor = rootReal;
+	for (const part of parts) {
+		cursor = path.join(cursor, part);
+		try {
+			const info = await lstat(cursor);
+			if (info.isSymbolicLink()) throw new Error("outputPath parent escapes the subagent outputs directory.");
+			if (!info.isDirectory()) throw new Error("outputPath parent is not a directory.");
+		} catch (error) {
+			if (error instanceof Error && /escapes|not a directory/.test(error.message)) throw error;
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			await mkdir(cursor, { mode: 0o700 });
+		}
+	}
+	const parentReal = await realpath(cursor);
+	if (!isSameOrDescendant(rootReal, parentReal)) {
+		throw new Error("outputPath parent escapes the subagent outputs directory.");
+	}
+	return path.join(parentReal, fileName);
+}
+
+export function childToolArgs(role: Role): string[] {
+	if (role === "general") return [];
+	if (role === "research" || role === "review") {
+		return [
+			"--no-extensions",
+			"--no-mcp",
+			"--no-context-files",
+			"--no-skills",
+			"--tools",
+			READ_ONLY_TOOL_NAMES.join(","),
+			"--exclude-tools",
+			RESEARCH_EXCLUDE,
+		];
+	}
+	return ["--no-extensions", "--no-mcp", "--exclude-tools", IMPLEMENT_EXCLUDE];
+}
+
+export function editAllowed(canonical: string, allowCanonical: readonly string[]): boolean {
+	return allowCanonical.includes(canonical);
+}
+
+export async function canonicalEditPath(filePath: string, cwd: string): Promise<string> {
+	const absolute = path.resolve(cwd, filePath);
+	try {
+		return await realpath(absolute);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code !== "ENOENT") throw error;
+		const parent = await realpath(path.dirname(absolute));
+		return path.join(parent, path.basename(absolute));
+	}
+}
+
+export function constraintPreamble(input: PreambleInput): string {
+	const lines = [
+		"# Subagent constraints",
+		"",
+		`Role: ${input.role}`,
+		`Invocation: ${input.invocation}`,
+		`Outcome: ${input.outcome}`,
+		`Metric: ${input.metric}`,
+		`Floor: ${input.floor}`,
+		`Target: ${input.target}`,
+	];
+	if (input.role === "research" || input.role === "review") {
+		lines.push(
+			`Output file (parent writes this; you cannot edit): ${input.outputPath ?? ""}`,
+			"Tools: read, grep, find, ls only. edit, write, bash, powershell, and subagent are not available.",
+			"Do not edit the repo. Return the report as your final text.",
+		);
+	}
+	if (input.role === "implement") {
+		lines.push(
+			`allowFiles: ${(input.allowFiles ?? []).join(", ")}`,
+			"edit and write outside allowFiles are blocked.",
+			"Residual [NEEDS-MEASUREMENT]: bash is not path-restricted.",
+		);
+	}
+	if (input.artifactPath) {
+		lines.push(`Artifact: ${input.artifactPath}`, `Artifact-SHA256: ${input.artifactSha256 ?? ""}`);
+	}
+	lines.push("");
+	return lines.join("\n");
+}
+
+export const ROLE_MODELS_FILE = "subagent-models.json";
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export interface ModelRef {
+	provider: string;
+	model: string;
+}
+
+export interface RoleModelConfig {
+	models: ModelRef[];
+	thinking?: ThinkingLevel;
+}
+
+export type RoleModels = Partial<Record<Role, RoleModelConfig>>;
+
+export interface SubagentModelConfig {
+	roles: RoleModels;
+	/** Tried after the parent model, so a child still starts when the parent's account is unusable. */
+	fallback: ModelRef[];
+}
+
+export interface ModelCandidate extends ModelRef {
+	source: "explicit" | "role" | "parent" | "fallback";
+}
+
+/** Split "provider/model"; a bare id takes the fallback provider. */
+export function parseModelRef(value: string, fallbackProvider: string | undefined): ModelRef | undefined {
+	const trimmed = value.trim();
+	const slash = trimmed.indexOf("/");
+	if (slash > 0) return { provider: trimmed.slice(0, slash), model: trimmed.slice(slash + 1) };
+	if (!trimmed || !fallbackProvider) return undefined;
+	return { provider: fallbackProvider, model: trimmed };
+}
+
+/** Validate the role model file (trust boundary: user-edited JSON). */
+export function parseModelConfig(raw: unknown): SubagentModelConfig {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		throw new Error(`${ROLE_MODELS_FILE} must be an object keyed by role.`);
+	}
+	const result: RoleModels = {};
+	let fallback: ModelRef[] = [];
+	for (const [key, value] of Object.entries(raw)) {
+		if (key === "fallback") {
+			fallback = parseModelList(value, "fallback");
+			continue;
+		}
+		const role = normalizeRole(key);
+		const entry = Array.isArray(value) || typeof value === "string" ? { models: value } : value;
+		if (!entry || typeof entry !== "object") throw new Error(`${ROLE_MODELS_FILE}: ${role} must be a list or object.`);
+		const { models, thinking } = entry as { models?: unknown; thinking?: unknown };
+		const refs = parseModelList(models, `${role}.models`);
+		if (thinking !== undefined && !THINKING_LEVELS.includes(thinking as ThinkingLevel)) {
+			throw new Error(`${ROLE_MODELS_FILE}: ${role}.thinking must be one of ${THINKING_LEVELS.join(", ")}.`);
+		}
+		result[role] = { models: refs, thinking: thinking as ThinkingLevel | undefined };
+	}
+	return { roles: result, fallback };
+}
+
+function parseModelList(value: unknown, label: string): ModelRef[] {
+	const list = typeof value === "string" ? [value] : value;
+	if (!Array.isArray(list) || list.length === 0 || list.some((item) => typeof item !== "string")) {
+		throw new Error(`${ROLE_MODELS_FILE}: ${label} must be a non-empty list of "provider/model" strings.`);
+	}
+	return list.map((item: string) => {
+		const ref = parseModelRef(item, undefined);
+		if (!ref) throw new Error(`${ROLE_MODELS_FILE}: ${label} model "${item}" must be "provider/model".`);
+		return ref;
+	});
+}
+
+const DEVIN_READER = "devin/adaptive";
+const DEVIN_FALLBACKS = ["devin/adaptive", "devin/swe-1-6"];
+const MAX_GENERATED_FALLBACKS = 4;
+
+/**
+ * Defaults written when the model file is missing: research and review read with Devin's router,
+ * and the fallback list holds the user's scoped models (settings enabledModels) plus Devin's
+ * general models, limited to models that are in the catalog with auth.
+ */
+export function defaultModelFile(available: readonly string[], enabledModels: readonly string[] | undefined): Record<string, string[]> {
+	const usable = new Set(available);
+	const file: Record<string, string[]> = {};
+	if (usable.has(DEVIN_READER)) {
+		file.research = [DEVIN_READER];
+		file.review = [DEVIN_READER];
+	}
+	// enabledModels entries may carry a ":thinking" suffix or be globs; only exact ids are kept.
+	const scoped = (enabledModels ?? []).map((entry) => entry.trim().replace(/:[a-z]+$/, ""));
+	const fallback = [...new Set([...scoped, ...DEVIN_FALLBACKS])].filter((id) => usable.has(id));
+	if (fallback.length > 0) file.fallback = fallback.slice(0, MAX_GENERATED_FALLBACKS);
+	return file;
+}
+
+/** Ordered models to try: an explicit override alone, else the role list, the parent model, then the fallback list. */
+export function modelCandidates(
+	explicit: ModelRef | undefined,
+	roleConfig: RoleModelConfig | undefined,
+	parent: ModelRef | undefined,
+	fallback: readonly ModelRef[] = [],
+): ModelCandidate[] {
+	if (explicit) return [{ ...explicit, source: "explicit" }];
+	const all: ModelCandidate[] = [
+		...(roleConfig?.models ?? []).map((ref) => ({ ...ref, source: "role" as const })),
+		...(parent ? [{ ...parent, source: "parent" as const }] : []),
+		...fallback.map((ref) => ({ ...ref, source: "fallback" as const })),
+	];
+	const seen = new Set<string>();
+	return all.filter((candidate) => {
+		const key = `${candidate.provider}/${candidate.model}`;
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+}
+
+const UNAVAILABLE_PATTERN =
+	/\b(401|402|403|404)\b|unauthori[sz]ed|unauthenticated|forbidden|permission denied|expired|billing|payment|quota|insufficient|credit|subscription|no api key|api key|not found|not available|unavailable model|unsupported model|invalid model|does not exist|access denied/i;
+
+/** A child that failed before running any tool, with an auth/plan/model error, may retry on the next model. */
+export function shouldTryNextModel(result: { status: string; error?: string; toolResults?: number }): boolean {
+	if (result.status !== "failed" || (result.toolResults ?? 0) > 0) return false;
+	return UNAVAILABLE_PATTERN.test(result.error ?? "");
+}
+
+/** True when an extension file registers a model provider, so children must load it to reach that provider. */
+export function registersProvider(source: string): boolean {
+	return /\.register(Native)?Provider\s*\(/.test(source);
+}
 
 const ATTACH_FLAG = "attach-subagent";
 const CHILD_ENV = "PI_TMUX_SUBAGENT_CHILD";
@@ -479,25 +807,51 @@ async function validateCwd(cwd: string): Promise<void> {
 	if (!info.isDirectory()) throw new Error(`Subagent working directory is not a directory: ${cwd}`);
 }
 
-function isSameOrDescendant(base: string, candidate: string): boolean {
-	const relative = path.relative(base, candidate);
-	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-}
-
-async function loadModelConfig(): Promise<SubagentModelConfig> {
+/** Read the model file, writing defaults from the usable models when it does not exist yet. */
+async function loadModelConfig(ctx: ExtensionContext): Promise<{ config: SubagentModelConfig; created?: string }> {
 	const file = path.join(getAgentDir(), ROLE_MODELS_FILE);
-	let config: SubagentModelConfig;
+	let text: string;
+	let created: string | undefined;
 	try {
-		config = parseModelConfig(JSON.parse(await readFile(file, "utf8")));
+		text = await readFile(file, "utf8");
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return { roles: {}, extensions: [] };
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		const available = ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`);
+		const enabled = SettingsManager.create(ctx.cwd).getEnabledModels();
+		text = `${JSON.stringify(defaultModelFile(available, enabled), null, 2)}\n`;
+		await writeFile(file, text, { encoding: "utf8", mode: 0o600, flag: "wx" }).catch((writeError: NodeJS.ErrnoException) => {
+			if (writeError.code !== "EEXIST") throw writeError;
+		});
+		created = file;
+	}
+	try {
+		return { config: parseModelConfig(JSON.parse(text)), created };
+	} catch (error) {
 		throw new Error(`Invalid ${file}: ${error instanceof Error ? error.message : String(error)}`);
 	}
-	const home = os.homedir();
-	const extensions = config.extensions.map((entry) =>
-		entry.startsWith("~/") ? path.join(home, entry.slice(2)) : path.resolve(getAgentDir(), entry),
-	);
-	return { ...config, extensions };
+}
+
+const OWN_PACKAGE_ROOT = path.dirname(path.dirname(EXTENSION_PATH));
+
+/**
+ * Extensions that register providers, from the same packages and settings the parent loaded.
+ * Research, review and implement children start with --no-extensions; without these they
+ * cannot reach a provider that comes from a package (for example Devin).
+ */
+async function providerExtensions(ctx: ExtensionContext): Promise<string[]> {
+	const settingsManager = SettingsManager.create(ctx.cwd);
+	const packages = new DefaultPackageManager({ cwd: ctx.cwd, agentDir: getAgentDir(), settingsManager, commandOutput: "capture" });
+	const resolved = await packages.resolve(async () => "skip");
+	const ownRoot = await realpath(OWN_PACKAGE_ROOT).catch(() => OWN_PACKAGE_ROOT);
+	const found: string[] = [];
+	for (const resource of resolved.extensions) {
+		if (!resource.enabled || resource.path === EXTENSION_PATH) continue;
+		const real = await realpath(resource.path).catch(() => resource.path);
+		if (isSameOrDescendant(ownRoot, real)) continue;
+		const source = await readFile(real, "utf8").catch(() => "");
+		if (registersProvider(source)) found.push(real);
+	}
+	return found;
 }
 
 function resolveModel(
@@ -748,14 +1102,16 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 				};
 			}
 
-			const modelConfig = await loadModelConfig();
+			const { config: modelConfig, created: createdModelFile } = await loadModelConfig(ctx);
 			const roleConfig = modelConfig.roles[role];
+			const childExtensions = role === "general" ? [] : await providerExtensions(ctx);
 			const explicit =
 				params.provider?.trim() || params.model?.trim() ? resolveModel(ctx, params.provider, params.model) : undefined;
 			const parent: ModelRef | undefined = ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : undefined;
 			const fallbacks: string[] = [];
-			const candidates = modelCandidates(explicit, roleConfig, parent).filter((candidate) => {
-				if (candidate.source !== "role") return true;
+			if (createdModelFile) fallbacks.push(`created ${createdModelFile} with defaults; edit it to change per-role models`);
+			const candidates = modelCandidates(explicit, roleConfig, parent, modelConfig.fallback).filter((candidate) => {
+				if (candidate.source === "explicit" || candidate.source === "parent") return true;
 				const label = `${candidate.provider}/${candidate.model}`;
 				const known = ctx.modelRegistry.find(candidate.provider, candidate.model);
 				if (!known) {
@@ -882,7 +1238,7 @@ export default function subagentExtension(pi: ExtensionAPI): void {
 						tmuxSession,
 						attemptSpec.trusted ? "--approve" : "--no-approve",
 						...childToolArgs(role),
-						...(role === "general" ? [] : modelConfig.extensions.flatMap((entry) => ["--extension", entry])),
+						...childExtensions.flatMap((entry) => ["--extension", entry]),
 						"--extension",
 						EXTENSION_PATH,
 						`@${promptPath}`,
