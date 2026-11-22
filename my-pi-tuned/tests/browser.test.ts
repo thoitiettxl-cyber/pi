@@ -43,6 +43,33 @@ test("logs --since beyond the current sequence skips existing entries without re
 	assert.equal(output.filter((line) => line.startsWith("[log]")).length, 0);
 });
 
+test("logs hook upgrade preserves the v4 buffer and its live writers", async () => {
+	const store = { version: 4, nextSeq: 8, dropped: 3, max: 2000, entries: [{ seq: 7, level: "log", message: "before upgrade" }] };
+	const write = (message: string) => store.entries.push({ seq: store.nextSeq++, level: "log", message });
+	const page = vm.createContext({ window: { __agentLogs: store, addEventListener() {} }, console: { log: write } });
+	let installs = 0;
+	const mocks = {
+		ensureBroker: async () => {}, brokerRequest: async () => ({ events: [] }),
+		cdpCall: async (_method: string, params: { source: string }) => {
+			installs++;
+			vm.runInContext(params.source, page);
+		},
+		evaluate: async (code: string) => vm.runInContext(code, page),
+	};
+	const first = await runScript("logs-tail", [], mocks);
+	assert.ok(first.some((line) => line.includes("before upgrade")), first.join("\n"));
+	assert.equal(page.window.__agentLogs, store);
+	assert.equal(store.version, 5);
+	assert.equal(store.nextSeq, 8);
+	assert.equal(store.dropped, 3);
+	assert.equal(typeof page.window.__agentLogs.generation, "string");
+	vm.runInContext('console.log("after upgrade")', page);
+	const second = await runScript("logs-tail", ["--since=7"], mocks);
+	assert.ok(second.some((line) => line.includes("after upgrade")), second.join("\n"));
+	assert.equal(store.entries.filter((entry) => entry.message === "after upgrade").length, 1);
+	assert.equal(installs, 2);
+});
+
 test("logs follow restarts its cursor when the page buffer resets", async () => {
 	const store = { version: 5, generation: "old", nextSeq: 101, dropped: 0, entries: [{ seq: 100, level: "log", message: "old page" }] };
 	const page = vm.createContext({ window: { __agentLogs: store } });
