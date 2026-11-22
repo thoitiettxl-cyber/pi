@@ -92,7 +92,16 @@ try {
     return JSON.stringify(v, (k, x) => typeof x === "bigint" ? x.toString() : x, 2) ?? "null";
   })()`;
 
+  let isExpression = true;
   try {
+    // Compile without executing: a runtime SyntaxError must never retry a write.
+    new Function(`return ${expression};`);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    isExpression = false;
+  }
+
+  if (isExpression) {
     if (has("--json")) {
       const text = await evaluate(jsonExpression, { tabId, timeout });
       console.log(text);
@@ -100,13 +109,10 @@ try {
       result = await evaluate(expression, { tabId, timeout });
       console.log(format(result));
     }
-  } catch (e) {
+  } else {
     // Not a single expression (e.g. `const x = 1; ...`): run it as statements.
     // Obscura reports this as exceptionDetails rather than a CDP error.
-    if (!/SyntaxError|Unexpected token|Unexpected identifier/i.test(e.message)) {
-      throw e;
-    }
-    log("expression failed, retrying as statement list");
+    log("expression did not parse, running as statement list");
     // A block scopes the statements so repeated `const x = ...` across separate
     // eval.js runs does not collide in the page's global scope.
     const fallback = await cdpCall(

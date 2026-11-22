@@ -44,6 +44,41 @@ test("eval --json awaits promises and await expressions, preserving BigInts", as
 	}
 });
 
+test("eval never retries runtime SyntaxErrors after side effects", async () => {
+	for (const json of [false, true]) {
+		const page = vm.createContext({ writes: 0 });
+		let fallbacks = 0;
+		const code = "(writes++, Promise.reject(new SyntaxError('write failed')))";
+		const output = await runScript("eval", [code, ...(json ? ["--json"] : [])], {
+			ensureBroker: async () => {}, applyActiveEmulation: async () => {}, sessionAdapter: () => ({}),
+			evaluate: async (expression: string) => {
+				try { return await vm.runInContext(expression, page); }
+				catch (error) { throw new Error(`SyntaxError: ${(error as Error).message}`); }
+			},
+			cdpCall: async (_method: string, params: { expression: string }) => {
+				fallbacks++;
+				try { await vm.runInContext(params.expression, page); } catch {}
+				return { result: { value: null } };
+			}, remoteObjectValue: (result: { value: unknown }) => result.value,
+		});
+		assert.equal(page.writes, 1, output.join("\n"));
+		assert.equal(fallbacks, 0);
+		assert.ok(output.some((line) => line.includes("write failed")));
+	}
+});
+
+test("eval still executes statement lists once after a compile-only parse check", async () => {
+	const page = vm.createContext({ writes: 0 });
+	const output = await runScript("eval", ["const value = 42; writes++; value", "--json"], {
+		ensureBroker: async () => {}, applyActiveEmulation: async () => {}, sessionAdapter: () => ({}),
+		evaluate: async () => { throw new Error("Statements must not run as an expression"); },
+		cdpCall: async (_method: string, params: { expression: string }) => ({ result: { value: vm.runInContext(params.expression, page) } }),
+		remoteObjectValue: (result: { value: unknown }) => result.value,
+	});
+	assert.equal(page.writes, 1);
+	assert.deepEqual(output, ["42"]);
+});
+
 test("stop --keep-server retains endpoint ownership but drops the broker pid", async () => {
 	for (const keep of [true, false]) {
 		let state: Record<string, unknown> | null = { serverPid: 123, brokerPid: 456, port: 9222, host: "127.0.0.1", stealth: true };
