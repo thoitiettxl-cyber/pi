@@ -20,7 +20,7 @@ import type {
 	ToolResultEvent,
 	ToolResultEventResult,
 } from "@earendil-works/pi-coding-agent";
-import extension, { compactWithContinuity } from "../compaction-continuity.ts";
+import extension, { compactWithContinuity } from "../extensions/compaction-continuity.ts";
 
 const originalTodoPath = process.env.PI_TODO_PATH;
 function stubEnv(name: string, value: string): void {
